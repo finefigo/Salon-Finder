@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
+import { ScissorsIcon, ArrowRightIcon } from '../components/Icons';
 
 const Login = () => {
     const [formData, setFormData] = useState({ email: '', password: '' });
@@ -19,9 +20,8 @@ const Login = () => {
 
         try {
             const response = await login(formData);
-            toast.success(response.message || 'Login successful!');
+            toast.success(response.message || 'Signed in successfully');
 
-            // Redirect based on role
             const user = response.data.user;
             if (user.role === 'admin') {
                 navigate('/admin');
@@ -31,31 +31,32 @@ const Login = () => {
                 navigate('/dashboard');
             }
         } catch (error) {
-            toast.error(error.response?.data?.message || 'Login failed');
+            toast.error(error.response?.data?.message || 'Invalid email or password');
         } finally {
             setLoading(false);
         }
     };
 
+    const handleDemoFill = (email, password) => {
+        setFormData({ email, password });
+    };
+
     return (
         <div className="auth-container">
-            <div className="auth-card fade-in">
+            <div className="auth-card">
                 <div style={{ textAlign: 'center', marginBottom: 'var(--spacing-lg)' }}>
-                    <Link to="/" style={{
-                        fontSize: '1.5rem',
-                        fontWeight: '800',
-                        background: 'var(--primary-gradient)',
-                        WebkitBackgroundClip: 'text',
-                        WebkitTextFillColor: 'transparent',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 'var(--spacing-sm)'
-                    }}>
-                        <span>✨</span> SalonFinder
+                    <Link to="/" className="navbar-brand" style={{ justifyContent: 'center', display: 'inline-flex' }}>
+                        <span className="brand-icon">
+                            <ScissorsIcon size={19} />
+                        </span>
+                        <span>Salon<span style={{ color: 'var(--accent-primary)' }}>Finder</span></span>
                     </Link>
                 </div>
 
                 <h2 className="auth-title">Welcome Back</h2>
+                <p className="auth-subtitle">
+                    Enter your credentials to access your account
+                </p>
 
                 <form onSubmit={handleSubmit}>
                     <div className="form-group">
@@ -64,7 +65,7 @@ const Login = () => {
                             type="email"
                             name="email"
                             className="form-input"
-                            placeholder="your@email.com"
+                            placeholder="name@example.com"
                             value={formData.email}
                             onChange={handleChange}
                             required
@@ -77,70 +78,75 @@ const Login = () => {
                             type="password"
                             name="password"
                             className="form-input"
-                            placeholder="Enter your password"
+                            placeholder="Enter your account password"
                             value={formData.password}
                             onChange={handleChange}
                             required
                         />
                     </div>
 
-                    <div style={{
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        marginBottom: 'var(--spacing-lg)'
-                    }}>
-                        <Link
-                            to="#"
-                            style={{
-                                fontSize: '0.875rem',
-                                color: 'var(--text-secondary)'
-                            }}
-                        >
-                            Forgot password?
-                        </Link>
-                    </div>
-
                     <button
                         type="submit"
-                        className="btn btn-primary btn-lg"
-                        style={{ width: '100%' }}
+                        className="btn btn-primary"
+                        style={{ width: '100%', padding: '0.8125rem', marginTop: '0.5rem' }}
                         disabled={loading}
                     >
                         {loading ? (
                             <>
-                                <span className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}></span>
-                                Signing in...
+                                <span className="spinner" style={{ width: '15px', height: '15px', borderWidth: '2px' }}></span>
+                                <span>Authenticating...</span>
                             </>
                         ) : (
-                            'Sign In'
+                            <>
+                                <span>Sign In</span>
+                                <ArrowRightIcon size={15} />
+                            </>
                         )}
                     </button>
                 </form>
 
-                <div className="divider">or</div>
-
-                <div style={{ display: 'flex', gap: 'var(--spacing-md)' }}>
-                    <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ flex: 1 }}
-                        disabled
-                    >
-                        🔵 Google
-                    </button>
-                    <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ flex: 1 }}
-                        disabled
-                    >
-                        🍎 Apple
-                    </button>
+                {/* Quick Demo Credentials Helper */}
+                <div style={{
+                    marginTop: 'var(--spacing-xl)',
+                    padding: 'var(--spacing-md)',
+                    background: 'var(--bg-canvas)',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '0.75rem'
+                }}>
+                    <span style={{ color: 'var(--text-muted)', display: 'block', marginBottom: '0.375rem', fontWeight: '600' }}>
+                        Quick Demo Logins:
+                    </span>
+                    <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                            onClick={() => handleDemoFill('admin@salonfinder.com', 'admin123')}
+                        >
+                            Admin
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+                            onClick={() => handleDemoFill('owner@salon.com', 'owner123')}
+                        >
+                            Salon Owner
+                        </button>
+                    </div>
                 </div>
 
-                <div className="auth-footer">
+                <div style={{
+                    textAlign: 'center',
+                    marginTop: 'var(--spacing-lg)',
+                    fontSize: '0.875rem',
+                    color: 'var(--text-secondary)'
+                }}>
                     Don't have an account?{' '}
-                    <Link to="/register">Sign up</Link>
+                    <Link to="/register" style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>
+                        Sign Up
+                    </Link>
                 </div>
             </div>
         </div>

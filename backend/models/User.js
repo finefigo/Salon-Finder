@@ -71,19 +71,20 @@ const UserSchema = new mongoose.Schema({
 UserSchema.pre('save', async function (next) {
     // Only hash if password is modified
     if (!this.isModified('password')) {
-        next();
+        return next();
     }
 
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+    next();
 });
 
 // Sign JWT and return
 UserSchema.methods.getSignedJwtToken = function () {
     return jwt.sign(
         { id: this._id, role: this.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRE }
+        process.env.JWT_SECRET || 'salon_secret_key_change_in_production_12345',
+        { expiresIn: process.env.JWT_EXPIRE || '7d' }
     );
 };
 

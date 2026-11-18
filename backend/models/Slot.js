@@ -49,8 +49,7 @@ const SlotSchema = new mongoose.Schema({
     }
 });
 
-// Compound index for efficient slot queries
-SlotSchema.index({ salon: 1, date: 1, startTime: 1 });
+// Compound index for slot queries with availability filters
 SlotSchema.index({ salon: 1, date: 1, isAvailable: 1, isEnabled: 1 });
 
 // Prevent duplicate slots (same salon, date, start time)

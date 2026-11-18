@@ -3,6 +3,17 @@ import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
 import { adminAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
+import {
+    SlidersIcon,
+    BuildingIcon,
+    UserIcon,
+    ClockIcon,
+    LogOutIcon,
+    ShieldCheckIcon,
+    ScissorsIcon,
+    CheckCircleIcon,
+    AlertCircleIcon
+} from '../components/Icons';
 
 // Sidebar
 const AdminSidebar = () => {
@@ -16,40 +27,72 @@ const AdminSidebar = () => {
     };
 
     const links = [
-        { path: '/admin', label: '📊 Dashboard', exact: true },
-        { path: '/admin/salons', label: '🏪 Salons' },
-        { path: '/admin/users', label: '👥 Users' },
-        { path: '/admin/bookings', label: '📋 Bookings' }
+        { path: '/admin', label: 'Platform Stats', icon: SlidersIcon, exact: true },
+        { path: '/admin/salons', label: 'Studios Moderation', icon: BuildingIcon },
+        { path: '/admin/users', label: 'User Directory', icon: UserIcon },
+        { path: '/admin/bookings', label: 'Global Bookings', icon: ClockIcon }
     ];
 
     return (
-        <div className="dashboard-sidebar">
-            <Link to="/" className="navbar-brand">✨ Admin Panel</Link>
-            <p style={{ color: 'var(--text-muted)', marginTop: '0.5rem', fontSize: '0.875rem' }}>
-                {user?.name}
-            </p>
+        <aside className="dashboard-sidebar">
+            <Link to="/" className="navbar-brand" style={{ marginBottom: '0.25rem' }}>
+                <span className="brand-icon">
+                    <ShieldCheckIcon size={18} />
+                </span>
+                <span>Admin<span style={{ color: 'var(--accent-primary)' }}>Control</span></span>
+            </Link>
+
+            <div style={{
+                padding: '0.75rem',
+                background: 'var(--bg-card)',
+                borderRadius: 'var(--radius-md)',
+                marginTop: '1rem',
+                border: '1px solid var(--border-subtle)'
+            }}>
+                <div style={{ fontSize: '0.8125rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                    {user?.name}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>
+                    Super Administrator
+                </div>
+            </div>
 
             <ul className="sidebar-nav">
-                {links.map(link => (
-                    <li key={link.path}>
-                        <Link
-                            to={link.path}
-                            className={`sidebar-link ${(link.exact ? location.pathname === link.path : location.pathname.startsWith(link.path) && link.path !== '/admin') ? 'active' : ''}`}
-                        >
-                            {link.label}
-                        </Link>
-                    </li>
-                ))}
+                {links.map(link => {
+                    const IconComponent = link.icon;
+                    const isActive = link.exact
+                        ? location.pathname === link.path
+                        : location.pathname.startsWith(link.path) && link.path !== '/admin';
+
+                    return (
+                        <li key={link.path}>
+                            <Link
+                                to={link.path}
+                                className={`sidebar-link ${isActive ? 'active' : ''}`}
+                            >
+                                <IconComponent size={16} />
+                                <span>{link.label}</span>
+                            </Link>
+                        </li>
+                    );
+                })}
             </ul>
 
-            <button onClick={handleLogout} className="btn btn-secondary" style={{ position: 'absolute', bottom: '2rem', left: '1rem', right: '1rem' }}>
-                Logout
-            </button>
-        </div>
+            <div style={{ marginTop: 'auto', paddingTop: 'var(--spacing-xl)' }}>
+                <button
+                    onClick={handleLogout}
+                    className="btn btn-secondary btn-sm"
+                    style={{ width: '100%', justifyContent: 'flex-start' }}
+                >
+                    <LogOutIcon size={15} />
+                    <span>Sign Out</span>
+                </button>
+            </div>
+        </aside>
     );
 };
 
-// Dashboard Overview
+// Admin Stats
 const AdminDashboardHome = () => {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -63,68 +106,75 @@ const AdminDashboardHome = () => {
             const response = await adminAPI.getStats();
             setStats(response.data.data);
         } catch (error) {
-            console.error('Error:', error);
+            console.error('Error fetching admin stats:', error);
         } finally {
             setLoading(false);
         }
     };
 
-    if (loading) return <div className="spinner"></div>;
+    if (loading) return <div className="loading-overlay"><div className="spinner"></div></div>;
 
     return (
-        <>
-            <h1 style={{ marginBottom: '2rem' }}>Admin Dashboard</h1>
+        <div>
+            <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Platform Metrics</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    System-wide activity, partner verification counts, and reservation volumes
+                </p>
+            </div>
 
             {stats && (
                 <div className="stats-grid">
                     <div className="stat-card">
                         <div className="stat-value">{stats.users?.customers || 0}</div>
-                        <div className="stat-label">Customers</div>
+                        <div className="stat-label">Clients Registered</div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-value">{stats.users?.salonOwners || 0}</div>
-                        <div className="stat-label">Salon Owners</div>
+                        <div className="stat-label">Studio Partners</div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-value">{stats.salons?.total || 0}</div>
-                        <div className="stat-label">Total Salons</div>
+                        <div className="stat-label">Total Studios</div>
                     </div>
                     <div className="stat-card">
-                        <div className="stat-value">{stats.salons?.pending || 0}</div>
+                        <div className="stat-value" style={{ color: stats.salons?.pending > 0 ? 'var(--warning)' : 'inherit' }}>
+                            {stats.salons?.pending || 0}
+                        </div>
                         <div className="stat-label">Pending Verification</div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-value">{stats.bookings?.total || 0}</div>
-                        <div className="stat-label">Total Bookings</div>
+                        <div className="stat-label">All Time Bookings</div>
                     </div>
                     <div className="stat-card">
-                        <div className="stat-value">{stats.bookings?.completed || 0}</div>
-                        <div className="stat-label">Completed</div>
+                        <div className="stat-value" style={{ color: 'var(--success)' }}>
+                            {stats.bookings?.confirmed || 0}
+                        </div>
+                        <div className="stat-label">Confirmed Sessions</div>
                     </div>
                 </div>
             )}
-        </>
+        </div>
     );
 };
 
-// Salons Management
-const SalonsManagement = () => {
+// Salon Moderation
+const SalonModeration = () => {
     const [salons, setSalons] = useState([]);
-    const [filter, setFilter] = useState('all');
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => { fetchSalons(); }, [filter]);
+    useEffect(() => {
+        fetchSalons();
+    }, []);
 
     const fetchSalons = async () => {
         setLoading(true);
         try {
-            const params = {};
-            if (filter === 'pending') params.isVerified = false;
-            if (filter === 'verified') params.isVerified = true;
-            const response = await adminAPI.getSalons(params);
-            setSalons(response.data.data);
+            const response = await adminAPI.getSalons();
+            setSalons(response.data.data || []);
         } catch (error) {
-            console.error('Error:', error);
+            setSalons([]);
         } finally {
             setLoading(false);
         }
@@ -133,210 +183,256 @@ const SalonsManagement = () => {
     const handleVerify = async (id) => {
         try {
             await adminAPI.verifySalon(id);
-            toast.success('Salon verified');
+            toast.success('Studio verified & published');
             fetchSalons();
         } catch (error) {
-            toast.error('Failed');
+            toast.error('Failed to verify');
         }
     };
 
-    const handleBlock = async (id) => {
-        if (!window.confirm('Block this salon?')) return;
+    const handleToggleBlock = async (id, isBlocked) => {
         try {
-            await adminAPI.blockSalon(id);
-            toast.success('Salon blocked');
+            if (isBlocked) {
+                await adminAPI.unblockSalon(id);
+                toast.success('Studio unblocked');
+            } else {
+                await adminAPI.blockSalon(id);
+                toast.success('Studio blocked');
+            }
             fetchSalons();
         } catch (error) {
-            toast.error('Failed');
+            toast.error('Failed to update status');
         }
     };
 
-    const handleUnblock = async (id) => {
-        try {
-            await adminAPI.unblockSalon(id);
-            toast.success('Salon unblocked');
-            fetchSalons();
-        } catch (error) {
-            toast.error('Failed');
-        }
-    };
+    if (loading) return <div className="loading-overlay"><div className="spinner"></div></div>;
 
     return (
-        <>
-            <h1 style={{ marginBottom: '2rem' }}>Manage Salons</h1>
-
-            <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>
-                {['all', 'pending', 'verified'].map(f => (
-                    <button key={f} className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setFilter(f)}>
-                        {f.charAt(0).toUpperCase() + f.slice(1)}
-                    </button>
-                ))}
+        <div>
+            <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Studios Moderation</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    Review new studio submissions, verify locations, and manage platform listings
+                </p>
             </div>
 
-            {loading ? <div className="spinner"></div> : (
-                <div className="table-container">
-                    <table className="table">
-                        <thead><tr><th>Name</th><th>Owner</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
-                        <tbody>
-                            {salons.map(s => (
-                                <tr key={s._id}>
-                                    <td>{s.name}</td>
-                                    <td>{s.owner?.name}<br /><span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.owner?.email}</span></td>
-                                    <td>{s.location?.city || 'N/A'}</td>
-                                    <td>
-                                        <span className={`badge ${s.isVerified ? 'badge-success' : 'badge-warning'}`}>
-                                            {s.isVerified ? 'Verified' : 'Pending'}
-                                        </span>
-                                        {!s.isActive && <span className="badge badge-error" style={{ marginLeft: '0.5rem' }}>Blocked</span>}
-                                    </td>
-                                    <td>
-                                        {!s.isVerified && <button className="btn btn-success btn-sm" onClick={() => handleVerify(s._id)}>Verify</button>}
-                                        {s.isActive ? (
-                                            <button className="btn btn-danger btn-sm" onClick={() => handleBlock(s._id)} style={{ marginLeft: '0.5rem' }}>Block</button>
-                                        ) : (
-                                            <button className="btn btn-secondary btn-sm" onClick={() => handleUnblock(s._id)} style={{ marginLeft: '0.5rem' }}>Unblock</button>
+            <div className="table-container">
+                <table className="table">
+                    <thead>
+                        <tr>
+                            <th>Studio Name</th>
+                            <th>Owner / Contact</th>
+                            <th>City</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {salons.map(s => (
+                            <tr key={s._id}>
+                                <td style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{s.name}</td>
+                                <td>{s.owner?.name || s.phone || 'Partner'}</td>
+                                <td>{s.location?.city || 'Delhi'}</td>
+                                <td>
+                                    {s.isVerified ? (
+                                        <span className="badge badge-success">Verified</span>
+                                    ) : (
+                                        <span className="badge badge-warning">Pending Review</span>
+                                    )}
+                                    {!s.isActive && (
+                                        <span className="badge badge-error" style={{ marginLeft: '0.375rem' }}>Blocked</span>
+                                    )}
+                                </td>
+                                <td>
+                                    <div style={{ display: 'flex', gap: '0.375rem' }}>
+                                        {!s.isVerified && (
+                                            <button
+                                                className="btn btn-success btn-sm"
+                                                onClick={() => handleVerify(s._id)}
+                                            >
+                                                Approve
+                                            </button>
                                         )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </>
+                                        <button
+                                            className="btn btn-secondary btn-sm"
+                                            onClick={() => handleToggleBlock(s._id, !s.isActive)}
+                                        >
+                                            {s.isActive ? 'Block' : 'Unblock'}
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 };
 
-// Users Management
-const UsersManagement = () => {
+// Users Directory
+const UsersDirectory = () => {
     const [users, setUsers] = useState([]);
-    const [roleFilter, setRoleFilter] = useState('');
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => { fetchUsers(); }, [roleFilter]);
+    useEffect(() => {
+        fetchUsers();
+    }, []);
 
     const fetchUsers = async () => {
         setLoading(true);
         try {
-            const params = {};
-            if (roleFilter) params.role = roleFilter;
-            const response = await adminAPI.getUsers(params);
-            setUsers(response.data.data);
+            const response = await adminAPI.getUsers();
+            setUsers(response.data.data || []);
         } catch (error) {
-            console.error('Error:', error);
+            setUsers([]);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleToggle = async (id) => {
+    const handleToggleActive = async (id) => {
         try {
             await adminAPI.toggleUserActive(id);
-            toast.success('User updated');
+            toast.success('User status toggled');
             fetchUsers();
         } catch (error) {
-            toast.error(error.response?.data?.message || 'Failed');
+            toast.error('Failed to update user');
         }
     };
 
-    return (
-        <>
-            <h1 style={{ marginBottom: '2rem' }}>Manage Users</h1>
+    if (loading) return <div className="loading-overlay"><div className="spinner"></div></div>;
 
-            <div style={{ marginBottom: '1rem' }}>
-                <select className="form-input form-select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)} style={{ width: 'auto' }}>
-                    <option value="">All Roles</option>
-                    <option value="customer">Customers</option>
-                    <option value="salonOwner">Salon Owners</option>
-                </select>
+    return (
+        <div>
+            <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>User Directory</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    Manage customer accounts and registered studio owners
+                </p>
             </div>
 
-            {loading ? <div className="spinner"></div> : (
-                <div className="table-container">
-                    <table className="table">
-                        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
-                        <tbody>
-                            {users.map(u => (
-                                <tr key={u._id}>
-                                    <td>{u.name}</td>
-                                    <td>{u.email}</td>
-                                    <td><span className="badge badge-info">{u.role}</span></td>
-                                    <td><span className={`badge ${u.isActive ? 'badge-success' : 'badge-error'}`}>{u.isActive ? 'Active' : 'Inactive'}</span></td>
-                                    <td>
-                                        {u.role !== 'admin' && (
-                                            <button className={`btn btn-sm ${u.isActive ? 'btn-danger' : 'btn-success'}`} onClick={() => handleToggle(u._id)}>
-                                                {u.isActive ? 'Deactivate' : 'Activate'}
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </>
+            <div className="table-container">
+                <table className="table">
+                    <thead>
+                        <tr>
+                            <th>User Name</th>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {users.map(u => (
+                            <tr key={u._id}>
+                                <td style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{u.name}</td>
+                                <td>{u.email}</td>
+                                <td>
+                                    <span className={`badge ${u.role === 'admin' ? 'badge-gold' : u.role === 'salonOwner' ? 'badge-info' : 'badge-subtle'}`}>
+                                        {u.role}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span className={`badge badge-${u.isActive ? 'success' : 'error'}`}>
+                                        {u.isActive ? 'Active' : 'Disabled'}
+                                    </span>
+                                </td>
+                                <td>
+                                    <button
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => handleToggleActive(u._id)}
+                                    >
+                                        {u.isActive ? 'Deactivate' : 'Activate'}
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 };
 
-// Bookings View
-const BookingsView = () => {
+// Global Bookings
+const GlobalBookings = () => {
     const [bookings, setBookings] = useState([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => { fetchBookings(); }, []);
+    useEffect(() => {
+        fetchBookings();
+    }, []);
 
     const fetchBookings = async () => {
+        setLoading(true);
         try {
-            const response = await adminAPI.getBookings({ limit: 50 });
-            setBookings(response.data.data);
+            const response = await adminAPI.getBookings();
+            setBookings(response.data.data || []);
         } catch (error) {
-            console.error('Error:', error);
+            setBookings([]);
         } finally {
             setLoading(false);
         }
     };
 
-    return (
-        <>
-            <h1 style={{ marginBottom: '2rem' }}>All Bookings</h1>
+    if (loading) return <div className="loading-overlay"><div className="spinner"></div></div>;
 
-            {loading ? <div className="spinner"></div> : (
-                <div className="table-container">
-                    <table className="table">
-                        <thead><tr><th>Date</th><th>Customer</th><th>Salon</th><th>Amount</th><th>Status</th></tr></thead>
-                        <tbody>
-                            {bookings.map(b => (
-                                <tr key={b._id}>
-                                    <td>{new Date(b.bookingDate).toLocaleDateString()} {b.bookingTime}</td>
-                                    <td>{b.customer?.name}</td>
-                                    <td>{b.salon?.name}</td>
-                                    <td>₹{b.totalAmount}</td>
-                                    <td><span className={`badge badge-${b.status === 'completed' ? 'success' : b.status === 'cancelled' ? 'error' : 'warning'}`}>{b.status}</span></td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </>
+    return (
+        <div>
+            <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Global Bookings Ledger</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    Audit appointments across all active studio partners
+                </p>
+            </div>
+
+            <div className="table-container">
+                <table className="table">
+                    <thead>
+                        <tr>
+                            <th>Client</th>
+                            <th>Studio</th>
+                            <th>Date / Time</th>
+                            <th>Amount</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {bookings.map(b => (
+                            <tr key={b._id}>
+                                <td style={{ fontWeight: '500', color: 'var(--text-primary)' }}>{b.customer?.name}</td>
+                                <td>{b.salon?.name}</td>
+                                <td>{b.bookingTime} ({b.bookingDate ? new Date(b.bookingDate).toLocaleDateString() : ''})</td>
+                                <td style={{ color: 'var(--accent-text)', fontWeight: '600' }}>₹{b.totalAmount}</td>
+                                <td>
+                                    <span className={`badge badge-${b.status === 'confirmed' ? 'success' : b.status === 'completed' ? 'info' : 'warning'}`}>
+                                        {b.status}
+                                    </span>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 };
 
-// Main Admin Panel
+// Main Admin Panel Component
 const AdminPanel = () => {
     return (
-        <>
+        <div className="dashboard-layout">
             <AdminSidebar />
-            <div className="dashboard-content">
+            <main className="dashboard-content">
                 <Routes>
                     <Route path="/" element={<AdminDashboardHome />} />
-                    <Route path="/salons" element={<SalonsManagement />} />
-                    <Route path="/users" element={<UsersManagement />} />
-                    <Route path="/bookings" element={<BookingsView />} />
+                    <Route path="/salons" element={<SalonModeration />} />
+                    <Route path="/users" element={<UsersDirectory />} />
+                    <Route path="/bookings" element={<GlobalBookings />} />
                 </Routes>
-            </div>
-        </>
+            </main>
+        </div>
     );
 };
 

@@ -4,6 +4,17 @@ import { salonAPI, slotAPI, bookingAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { format, addDays } from 'date-fns';
+import {
+    MapPinIcon,
+    StarIcon,
+    ClockIcon,
+    PhoneIcon,
+    ShieldCheckIcon,
+    CheckIcon,
+    CalendarIcon,
+    ScissorsIcon,
+    ArrowRightIcon
+} from '../components/Icons';
 
 const SalonDetails = () => {
     const { id } = useParams();
@@ -18,6 +29,7 @@ const SalonDetails = () => {
     const [selectedServices, setSelectedServices] = useState([]);
     const [selectedSlot, setSelectedSlot] = useState(null);
     const [booking, setBooking] = useState(false);
+    const [activeCategory, setActiveCategory] = useState('all');
 
     useEffect(() => {
         fetchSalonDetails();
@@ -33,9 +45,9 @@ const SalonDetails = () => {
         try {
             const response = await salonAPI.getById(id);
             setSalon(response.data.data.salon);
-            setServices(response.data.data.services);
+            setServices(response.data.data.services || []);
         } catch (error) {
-            toast.error('Failed to load salon details');
+            toast.error('Could not load salon details');
             navigate('/salons');
         } finally {
             setLoading(false);
@@ -45,16 +57,17 @@ const SalonDetails = () => {
     const fetchSlots = async () => {
         try {
             const response = await slotAPI.getSalonSlots(id, selectedDate);
-            setSlots(response.data.data);
+            setSlots(response.data.data || []);
         } catch (error) {
             console.error('Error fetching slots:', error);
+            setSlots([]);
         }
     };
 
     const toggleService = (serviceId) => {
         setSelectedServices(prev =>
             prev.includes(serviceId)
-                ? prev.filter(id => id !== serviceId)
+                ? prev.filter(sId => sId !== serviceId)
                 : [...prev, serviceId]
         );
     };
@@ -65,15 +78,21 @@ const SalonDetails = () => {
             .reduce((sum, s) => sum + s.price, 0);
     };
 
+    const getTotalDuration = () => {
+        return services
+            .filter(s => selectedServices.includes(s._id))
+            .reduce((sum, s) => sum + (s.duration || 30), 0);
+    };
+
     const handleBooking = async () => {
         if (!isAuthenticated) {
-            toast.error('Please login to book');
+            toast.error('Please sign in to complete your booking');
             navigate('/login');
             return;
         }
 
         if (user.role !== 'customer') {
-            toast.error('Only customers can book appointments');
+            toast.error('Salon owners cannot book customer appointments');
             return;
         }
 
@@ -83,7 +102,7 @@ const SalonDetails = () => {
         }
 
         if (!selectedSlot) {
-            toast.error('Please select a time slot');
+            toast.error('Please choose an available time slot');
             return;
         }
 
@@ -93,7 +112,7 @@ const SalonDetails = () => {
                 slotId: selectedSlot,
                 serviceIds: selectedServices
             });
-            toast.success('Booking confirmed!');
+            toast.success('Appointment confirmed!');
             navigate(`/booking/confirmation/${response.data.data._id}`);
         } catch (error) {
             toast.error(error.response?.data?.message || 'Booking failed');
@@ -102,175 +121,254 @@ const SalonDetails = () => {
         }
     };
 
-    // Generate date options for next 7 days
+    // 7 Days Date options
     const dateOptions = Array.from({ length: 7 }, (_, i) => {
         const date = addDays(new Date(), i);
         return {
             value: format(date, 'yyyy-MM-dd'),
-            label: format(date, 'EEE'),
-            date: format(date, 'd'),
+            dayName: format(date, 'EEE'),
+            dayNum: format(date, 'd'),
             month: format(date, 'MMM')
         };
     });
+
+    // Categories available in services
+    const categories = ['all', ...Array.from(new Set(services.map(s => s.category).filter(Boolean)))];
+
+    const filteredServices = activeCategory === 'all'
+        ? services
+        : services.filter(s => s.category === activeCategory);
+
+    const selectedSlotObj = slots.find(s => s._id === selectedSlot);
 
     if (loading) {
         return (
             <div className="loading-overlay">
                 <div className="spinner"></div>
-                <p className="loading-text">Loading salon details...</p>
+                <p style={{ fontSize: '0.875rem' }}>Loading salon profile...</p>
             </div>
         );
     }
 
+    if (!salon) return null;
+
+    const coverImg = (salon.coverImage && salon.coverImage.startsWith('http'))
+        ? salon.coverImage
+        : 'https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1200&q=80';
+
     return (
-        <div className="container" style={{ padding: 'var(--spacing-xl) var(--spacing-lg)', paddingBottom: selectedServices.length > 0 || selectedSlot ? '140px' : 'var(--spacing-xl)' }}>
-            <div className="fade-in">
-                {/* Salon Header */}
-                <div className="glass-card" style={{ marginBottom: 'var(--spacing-xl)' }}>
-                    <div style={{ display: 'flex', gap: 'var(--spacing-xl)', flexWrap: 'wrap' }}>
-                        <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-                            <img
-                                src={salon.coverImage || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400'}
-                                alt={salon.name}
-                                style={{
-                                    width: '320px',
-                                    height: '220px',
-                                    objectFit: 'cover',
-                                    display: 'block'
-                                }}
-                            />
-                            <div style={{
-                                position: 'absolute',
-                                bottom: 0,
-                                left: 0,
-                                right: 0,
-                                padding: 'var(--spacing-md)',
-                                background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)'
-                            }}>
-                                <span className="salon-distance">
-                                    📍 {salon.distanceKm || '2.5'} km away
-                                </span>
+        <div className="container" style={{
+            padding: 'var(--spacing-2xl) var(--spacing-lg)',
+            paddingBottom: (selectedServices.length > 0 || selectedSlot) ? '120px' : 'var(--spacing-2xl)'
+        }}>
+            {/* Salon Profile Header */}
+            <div className="salon-hero-banner">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'var(--spacing-xl)', alignItems: 'center' }}>
+                    <div style={{
+                        position: 'relative',
+                        borderRadius: 'var(--radius-xl)',
+                        overflow: 'hidden',
+                        aspectRatio: '16 / 10',
+                        maxHeight: '260px'
+                    }}>
+                        <img
+                            src={coverImg}
+                            alt={salon.name}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                        {salon.isVerified && (
+                            <span className="salon-verified-tag">
+                                <ShieldCheckIcon size={12} />
+                                <span>Verified Studio</span>
+                            </span>
+                        )}
+                    </div>
+
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                            <div className="salon-rating-pill">
+                                <StarIcon size={14} filled={true} />
+                                <span>{salon.averageRating ? salon.averageRating.toFixed(1) : '4.8'}</span>
                             </div>
+                            <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
+                                ({salon.totalReviews || 18} client reviews)
+                            </span>
+                            <span className="badge badge-gold">
+                                Slot Duration: {salon.slotDuration || 30}m
+                            </span>
                         </div>
-                        <div style={{ flex: 1, minWidth: '280px' }}>
-                            <h1 style={{ marginBottom: 'var(--spacing-sm)', fontSize: '1.75rem' }}>{salon.name}</h1>
-                            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--spacing-md)', display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                                📍 {salon.location?.formattedAddress || salon.location?.city || 'Location unavailable'}
-                            </p>
-                            <div style={{ display: 'flex', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)', flexWrap: 'wrap' }}>
-                                <span className="badge badge-success" style={{ fontSize: '0.875rem', padding: 'var(--spacing-sm) var(--spacing-md)' }}>
-                                    ⭐ {salon.averageRating?.toFixed(1) || 'New'}
-                                </span>
-                                <span className="badge badge-info" style={{ fontSize: '0.875rem', padding: 'var(--spacing-sm) var(--spacing-md)' }}>
-                                    💬 {salon.totalReviews || 0} reviews
-                                </span>
-                            </div>
-                            <p style={{ color: 'var(--text-secondary)', lineHeight: '1.6', marginBottom: 'var(--spacing-md)' }}>
-                                {salon.description || 'Welcome to our salon! We offer premium grooming services with experienced professionals.'}
-                            </p>
-                            <div style={{ display: 'flex', gap: 'var(--spacing-lg)', color: 'var(--text-secondary)', fontSize: '0.9375rem' }}>
-                                <span>📞 {salon.phone}</span>
-                            </div>
+
+                        <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{salon.name}</h1>
+
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: 'var(--text-secondary)',
+                            fontSize: '0.875rem',
+                            marginBottom: 'var(--spacing-md)'
+                        }}>
+                            <MapPinIcon size={15} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                            <span>{salon.location?.formattedAddress || salon.location?.city || 'Location provided'}</span>
+                        </div>
+
+                        <p style={{
+                            color: 'var(--text-secondary)',
+                            fontSize: '0.875rem',
+                            lineHeight: '1.6',
+                            marginBottom: 'var(--spacing-lg)'
+                        }}>
+                            {salon.description || 'Dedicated to offering premium styling, personalized care, and top-tier grooming services in an ambient and relaxed environment.'}
+                        </p>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                            {salon.phone && (
+                                <a
+                                    href={`tel:${salon.phone}`}
+                                    className="btn btn-secondary btn-sm"
+                                    style={{ gap: '0.375rem' }}
+                                >
+                                    <PhoneIcon size={14} />
+                                    <span>{salon.phone}</span>
+                                </a>
+                            )}
+                            <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
+                                Instant reservation with real-time seat lock
+                            </span>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 'var(--spacing-xl)' }}>
-                    {/* Services */}
-                    <div className="glass-card">
-                        <h3 style={{ marginBottom: 'var(--spacing-lg)', display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                            <span>💇</span> Select Services
-                        </h3>
+            {/* Two-Column Booking Layout */}
+            <div className="details-layout-grid">
+                {/* Left Column: Services Selection */}
+                <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-md)' }}>
+                        <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <ScissorsIcon size={18} style={{ color: 'var(--accent-primary)' }} />
+                            <span>1. Choose Services</span>
+                        </h2>
+                        <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
+                            {selectedServices.length} selected
+                        </span>
+                    </div>
+
+                    {/* Category Filter Pills */}
+                    {categories.length > 2 && (
+                        <div style={{ display: 'flex', gap: '0.375rem', overflowX: 'auto', paddingBottom: '0.5rem', marginBottom: 'var(--spacing-md)' }}>
+                            {categories.map(cat => (
+                                <button
+                                    key={cat}
+                                    className={`category-chip ${activeCategory === cat ? 'active' : ''}`}
+                                    onClick={() => setActiveCategory(cat)}
+                                    style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem', textTransform: 'capitalize' }}
+                                >
+                                    {cat}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {filteredServices.length === 0 ? (
+                        <div className="card" style={{ textAlign: 'center', padding: 'var(--spacing-xl)' }}>
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                                No services found under this category.
+                            </p>
+                        </div>
+                    ) : (
                         <div className="service-list">
-                            {services.length === 0 ? (
-                                <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--spacing-xl)' }}>
-                                    No services available
-                                </p>
-                            ) : (
-                                services.map(service => (
+                            {filteredServices.map(service => {
+                                const isSelected = selectedServices.includes(service._id);
+                                return (
                                     <div
                                         key={service._id}
-                                        className={`service-item ${selectedServices.includes(service._id) ? 'selected' : ''}`}
+                                        className={`service-item ${isSelected ? 'selected' : ''}`}
                                         onClick={() => toggleService(service._id)}
-                                        style={{ position: 'relative' }}
                                     >
                                         <div>
                                             <div className="service-name">{service.name}</div>
                                             <div className="service-meta">
-                                                ⏱ {service.duration} mins • {service.category}
+                                                <ClockIcon size={13} />
+                                                <span>{service.duration || 30} mins</span>
+                                                {service.category && (
+                                                    <span>• {service.category}</span>
+                                                )}
                                             </div>
                                         </div>
+
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
                                             <div className="service-price">₹{service.price}</div>
                                             <div style={{
-                                                width: '24px',
-                                                height: '24px',
+                                                width: '22px',
+                                                height: '22px',
                                                 borderRadius: '50%',
-                                                border: selectedServices.includes(service._id) ? 'none' : '2px solid var(--border-glass)',
-                                                background: selectedServices.includes(service._id) ? 'var(--primary-gradient)' : 'transparent',
+                                                border: isSelected ? 'none' : '1.5px solid var(--border-card)',
+                                                background: isSelected ? 'var(--accent-primary)' : 'transparent',
+                                                color: 'var(--text-inverse)',
                                                 display: 'flex',
                                                 alignItems: 'center',
                                                 justifyContent: 'center',
-                                                color: 'white',
-                                                fontSize: '0.75rem',
-                                                fontWeight: 'bold',
                                                 transition: 'all var(--transition-fast)'
                                             }}>
-                                                {selectedServices.includes(service._id) && '✓'}
+                                                {isSelected && <CheckIcon size={14} />}
                                             </div>
                                         </div>
                                     </div>
-                                ))
-                            )}
+                                );
+                            })}
                         </div>
+                    )}
+                </div>
+
+                {/* Right Column: Date & Slot Selection */}
+                <div>
+                    <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                        <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                            <CalendarIcon size={18} style={{ color: 'var(--accent-primary)' }} />
+                            <span>2. Select Date & Slot</span>
+                        </h2>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                            Choose your preferred appointment day
+                        </p>
                     </div>
 
-                    {/* Date & Slots */}
-                    <div className="glass-card">
-                        <h3 style={{ marginBottom: 'var(--spacing-lg)', display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                            <span>📅</span> Select Date & Time
-                        </h3>
+                    {/* Date Carousel Strip */}
+                    <div className="date-strip">
+                        {dateOptions.map(({ value, dayName, dayNum, month }) => (
+                            <button
+                                key={value}
+                                className={`date-btn ${selectedDate === value ? 'selected' : ''}`}
+                                onClick={() => {
+                                    setSelectedDate(value);
+                                    setSelectedSlot(null);
+                                }}
+                            >
+                                <span className="date-btn-day">{dayName}</span>
+                                <span className="date-btn-num">{dayNum}</span>
+                                <span className="date-btn-month">{month}</span>
+                            </button>
+                        ))}
+                    </div>
 
-                        {/* Date Picker */}
-                        <div style={{
-                            display: 'flex',
-                            gap: 'var(--spacing-sm)',
-                            marginBottom: 'var(--spacing-xl)',
-                            overflowX: 'auto',
-                            paddingBottom: 'var(--spacing-sm)'
-                        }}>
-                            {dateOptions.map(({ value, label, date, month }) => (
-                                <button
-                                    key={value}
-                                    className={`btn ${selectedDate === value ? 'btn-primary' : 'btn-secondary'}`}
-                                    onClick={() => {
-                                        setSelectedDate(value);
-                                        setSelectedSlot(null);
-                                    }}
-                                    style={{
-                                        flexDirection: 'column',
-                                        padding: 'var(--spacing-md)',
-                                        minWidth: '70px'
-                                    }}
-                                >
-                                    <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>{label}</span>
-                                    <span style={{ fontSize: '1.25rem', fontWeight: '700' }}>{date}</span>
-                                    <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>{month}</span>
-                                </button>
-                            ))}
+                    {/* Slots Grid */}
+                    <div className="card" style={{ padding: 'var(--spacing-lg)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--spacing-md)' }}>
+                            <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
+                                Available Timeslots ({format(new Date(selectedDate), 'MMM d')})
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {slots.filter(s => s.isAvailable).length} slots free
+                            </span>
                         </div>
 
-                        {/* Time Slots */}
-                        <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--spacing-md)', fontSize: '0.875rem' }}>
-                            Available time slots:
-                        </p>
-                        <div className="slots-container" style={{ marginTop: 'var(--spacing-lg)' }}>
-                            {slots.length === 0 ? (
-                                <p style={{ color: 'var(--text-muted)', gridColumn: '1/-1', textAlign: 'center', padding: 'var(--spacing-xl)' }}>
-                                    No slots available for this date
-                                </p>
-                            ) : (
-                                slots.map(slot => (
+                        {slots.length === 0 ? (
+                            <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 'var(--spacing-lg)', fontSize: '0.875rem' }}>
+                                No slots configured for this date yet. Check back soon.
+                            </p>
+                        ) : (
+                            <div className="slots-container">
+                                {slots.map(slot => (
                                     <button
                                         key={slot._id}
                                         className={`slot-btn ${selectedSlot === slot._id ? 'selected' : ''}`}
@@ -278,62 +376,57 @@ const SalonDetails = () => {
                                         disabled={!slot.isAvailable}
                                     >
                                         {slot.startTime}
-                                        {!slot.isAvailable && <span style={{ display: 'block', fontSize: '0.625rem', opacity: 0.7 }}>Booked</span>}
                                     </button>
-                                ))
-                            )}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
-
-                {/* Booking Summary - Fixed at bottom */}
-                {(selectedServices.length > 0 || selectedSlot) && (
-                    <div className="booking-summary-bar" style={{
-                        position: 'fixed',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        padding: 'var(--spacing-lg) var(--spacing-xl)',
-                        background: 'linear-gradient(135deg, rgba(20, 15, 35, 0.98) 0%, rgba(30, 20, 45, 0.98) 100%)',
-                        backdropFilter: 'blur(30px)',
-                        borderTop: '1px solid rgba(139, 92, 246, 0.3)',
-                        zIndex: 100,
-                        boxShadow: '0 -10px 40px rgba(0, 0, 0, 0.5)'
-                    }}>
-                        <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--spacing-lg)' }}>
-                            <div>
-                                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--spacing-xs)' }}>
-                                    {selectedServices.length} service(s) selected
-                                    {selectedSlot && ' • Time slot selected'}
-                                </p>
-                                <p style={{ fontSize: '1.75rem', fontWeight: '800' }}>
-                                    <span style={{
-                                        background: 'var(--primary-gradient)',
-                                        WebkitBackgroundClip: 'text',
-                                        WebkitTextFillColor: 'transparent'
-                                    }}>
-                                        ₹{getTotalPrice()}
-                                    </span>
-                                </p>
-                            </div>
-                            <button
-                                className="btn btn-primary btn-lg"
-                                onClick={handleBooking}
-                                disabled={booking || selectedServices.length === 0 || !selectedSlot}
-                            >
-                                {booking ? (
-                                    <>
-                                        <span className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}></span>
-                                        Booking...
-                                    </>
-                                ) : (
-                                    <>✨ Confirm Booking</>
-                                )}
-                            </button>
-                        </div>
-                    </div>
-                )}
             </div>
+
+            {/* Bottom Floating Booking Bar */}
+            {(selectedServices.length > 0 || selectedSlot) && (
+                <div className="booking-summary-bar">
+                    <div className="summary-content">
+                        <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.125rem' }}>
+                                <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                                    {selectedServices.length} {selectedServices.length === 1 ? 'service' : 'services'} ({getTotalDuration()} mins)
+                                </span>
+                                {selectedSlotObj && (
+                                    <>
+                                        <span style={{ color: 'var(--text-muted)' }}>•</span>
+                                        <span style={{ fontSize: '0.8125rem', color: 'var(--accent-primary)', fontWeight: '600' }}>
+                                            {format(new Date(selectedDate), 'MMM d')} @ {selectedSlotObj.startTime}
+                                        </span>
+                                    </>
+                                )}
+                            </div>
+                            <div style={{ fontFamily: 'var(--font-heading)', fontSize: '1.5rem', fontWeight: '800', color: 'var(--accent-text)' }}>
+                                ₹{getTotalPrice()}
+                            </div>
+                        </div>
+
+                        <button
+                            className="btn btn-primary btn-lg"
+                            onClick={handleBooking}
+                            disabled={booking || selectedServices.length === 0 || !selectedSlot}
+                        >
+                            {booking ? (
+                                <>
+                                    <span className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></span>
+                                    <span>Confirming Appointment...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>Confirm Appointment</span>
+                                    <ArrowRightIcon size={16} />
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

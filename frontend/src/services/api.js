@@ -27,7 +27,13 @@ api.interceptors.response.use(
         // Handle 401 unauthorized
         if (error.response?.status === 401) {
             localStorage.removeItem('token');
-            window.location.href = '/login';
+            const protectedPrefixes = ['/dashboard', '/owner', '/admin', '/booking/confirmation'];
+            const currentPath = window.location.pathname;
+            const isProtected = protectedPrefixes.some(prefix => currentPath.startsWith(prefix));
+            
+            if (isProtected && currentPath !== '/login') {
+                window.location.href = '/login';
+            }
         }
         return Promise.reject(error);
     }

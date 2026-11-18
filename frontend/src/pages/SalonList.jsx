@@ -1,42 +1,37 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { salonAPI } from '../services/api';
 import toast from 'react-hot-toast';
+import {
+    MapPinIcon,
+    StarIcon,
+    SearchIcon,
+    SlidersIcon,
+    RefreshCwIcon,
+    ShieldCheckIcon,
+    ArrowRightIcon
+} from '../components/Icons';
 
 const SalonList = () => {
+    const [searchParams] = useSearchParams();
+    const initialSearch = searchParams.get('search') || '';
+
     const [salons, setSalons] = useState([]);
     const [loading, setLoading] = useState(true);
     const [location, setLocation] = useState({ lat: null, lng: null });
     const [locationStatus, setLocationStatus] = useState('detecting'); // detecting, success, fallback, error
-    const [radius, setRadius] = useState(5);
+    const [radius, setRadius] = useState(10);
     const [sortBy, setSortBy] = useState('distance');
+    const [searchTerm, setSearchTerm] = useState(initialSearch);
 
     // Get user location
     const requestLocation = async () => {
         setLocationStatus('detecting');
 
         if (!navigator.geolocation) {
-            toast.error('Geolocation is not supported by your browser');
             setLocationStatus('error');
             setLocation({ lat: 28.6139, lng: 77.2090 });
             return;
-        }
-
-        // Check permission status first
-        if (navigator.permissions) {
-            try {
-                const permission = await navigator.permissions.query({ name: 'geolocation' });
-                console.log('Location permission:', permission.state);
-
-                if (permission.state === 'denied') {
-                    toast.error('Location BLOCKED! Click 🔒 in address bar → Location → Allow');
-                    setLocationStatus('fallback');
-                    setLocation({ lat: 28.6139, lng: 77.2090 });
-                    return;
-                }
-            } catch (e) {
-                console.log('Permission API not available');
-            }
         }
 
         navigator.geolocation.getCurrentPosition(
@@ -46,26 +41,18 @@ const SalonList = () => {
                     lng: position.coords.longitude
                 });
                 setLocationStatus('success');
-                toast.success('Location detected!');
+                toast.success('Location updated');
             },
             (error) => {
-                console.error('Location error:', error);
-                // Use fallback location (Delhi)
+                console.warn('Geolocation notice:', error.message);
+                // Fallback location: Delhi coordinates
                 setLocation({ lat: 28.6139, lng: 77.2090 });
                 setLocationStatus('fallback');
-
-                if (error.code === error.PERMISSION_DENIED) {
-                    toast.error('Location blocked. Click 🔒 icon in address bar to allow.');
-                } else if (error.code === error.TIMEOUT) {
-                    toast.error('Location timed out. Check Windows Settings → Privacy → Location');
-                } else {
-                    toast.error('Could not get your location. Showing salons in Delhi.');
-                }
             },
             {
-                enableHighAccuracy: false, // Faster on PCs
-                timeout: 30000,            // 30 seconds
-                maximumAge: 60000          // Accept 1 minute old cache
+                enableHighAccuracy: false,
+                timeout: 10000,
+                maximumAge: 120000
             }
         );
     };
@@ -74,7 +61,7 @@ const SalonList = () => {
         requestLocation();
     }, []);
 
-    // Fetch salons when location is available
+    // Fetch salons when location or filters change
     useEffect(() => {
         if (location.lat && location.lng) {
             fetchSalons();
@@ -90,178 +77,264 @@ const SalonList = () => {
                 radius,
                 sortBy
             });
-            setSalons(response.data.data);
+            setSalons(response.data.data || []);
         } catch (error) {
             console.error('Error fetching salons:', error);
-            setSalons([]);
+            // Fallback to general salons API if geo fails
+            try {
+                const fallbackRes = await salonAPI.getAll({ search: searchTerm });
+                setSalons(fallbackRes.data.data || []);
+            } catch (e) {
+                setSalons([]);
+            }
         } finally {
             setLoading(false);
         }
     };
 
+    // Filter by search query in memory for instant feedback
+    const filteredSalons = salons.filter((salon) => {
+        if (!searchTerm.trim()) return true;
+        const query = searchTerm.toLowerCase();
+        return (
+            salon.name?.toLowerCase().includes(query) ||
+            salon.location?.city?.toLowerCase().includes(query) ||
+            salon.location?.formattedAddress?.toLowerCase().includes(query) ||
+            salon.description?.toLowerCase().includes(query)
+        );
+    });
+
+    const defaultImages = [
+        'https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=600&q=80',
+        'https://images.unsplash.com/photo-1521590832167-7bcbfaa6381f?auto=format&fit=crop&w=600&q=80',
+        'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=600&q=80',
+        'https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=600&q=80'
+    ];
+
     return (
-        <div className="container" style={{ padding: 'var(--spacing-xl) var(--spacing-lg)' }}>
-            <div className="fade-in">
-                {/* Page Header */}
-                <div className="page-header">
-                    <h1>Nearby Salons</h1>
-                    <p>Find and book the best salons near you</p>
+        <div className="container" style={{ padding: 'var(--spacing-2xl) var(--spacing-lg)' }}>
+            {/* Header */}
+            <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                <h1 style={{ fontSize: '2rem', marginBottom: '0.375rem' }}>Explore Studios & Salons</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem' }}>
+                    Compare top-rated grooming studios and reserve real-time slots
+                </p>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="filter-bar">
+                {/* Search in list */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: '1 1 220px', minWidth: '200px' }}>
+                    <SearchIcon size={16} style={{ color: 'var(--text-muted)' }} />
+                    <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Filter by studio name, service..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        style={{ padding: '0.45rem 0.75rem', fontSize: '0.875rem' }}
+                    />
                 </div>
 
-                {/* Filter Bar */}
-                <div className="filter-bar">
-                    <div>
-                        <label className="form-label" style={{ marginBottom: 'var(--spacing-xs)' }}>
-                            📍 Radius
-                        </label>
-                        <select
-                            className="form-input form-select"
-                            value={radius}
-                            onChange={(e) => setRadius(Number(e.target.value))}
-                            style={{ width: 'auto', minWidth: '120px' }}
-                        >
-                            <option value={2}>2 km</option>
-                            <option value={5}>5 km</option>
-                            <option value={10}>10 km</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className="form-label" style={{ marginBottom: 'var(--spacing-xs)' }}>
-                            🔄 Sort By
-                        </label>
-                        <select
-                            className="form-input form-select"
-                            value={sortBy}
-                            onChange={(e) => setSortBy(e.target.value)}
-                            style={{ width: 'auto', minWidth: '140px' }}
-                        >
-                            <option value="distance">Nearest</option>
-                            <option value="rating">Top Rated</option>
-                        </select>
-                    </div>
-                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-end' }}>
-                        <button
-                            className="btn btn-secondary"
-                            onClick={requestLocation}
-                            disabled={locationStatus === 'detecting'}
-                        >
-                            {locationStatus === 'detecting' ? (
-                                <>
-                                    <span className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }}></span>
-                                    Detecting...
-                                </>
+                {/* Radius filter */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', fontWeight: '600' }}>
+                        Radius:
+                    </span>
+                    <select
+                        className="form-select"
+                        value={radius}
+                        onChange={(e) => setRadius(Number(e.target.value))}
+                        style={{ width: 'auto', minWidth: '100px', padding: '0.45rem 2rem 0.45rem 0.75rem', fontSize: '0.875rem' }}
+                    >
+                        <option value={2}>2 km</option>
+                        <option value={5}>5 km</option>
+                        <option value={10}>10 km</option>
+                        <option value={25}>25 km</option>
+                    </select>
+                </div>
+
+                {/* Sort filter */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', fontWeight: '600' }}>
+                        Sort:
+                    </span>
+                    <select
+                        className="form-select"
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        style={{ width: 'auto', minWidth: '120px', padding: '0.45rem 2rem 0.45rem 0.75rem', fontSize: '0.875rem' }}
+                    >
+                        <option value="distance">Nearest</option>
+                        <option value="rating">Top Rated</option>
+                    </select>
+                </div>
+
+                {/* Location Action Button */}
+                <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={requestLocation}
+                    disabled={locationStatus === 'detecting'}
+                    title="Recalculate distance using live coordinates"
+                >
+                    {locationStatus === 'detecting' ? (
+                        <>
+                            <span className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }}></span>
+                            <span>Detecting...</span>
+                        </>
+                    ) : (
+                        <>
+                            <RefreshCwIcon size={14} />
+                            <span>GPS Refresh</span>
+                        </>
+                    )}
+                </button>
+            </div>
+
+            {/* Location Notice Pill */}
+            {locationStatus !== 'detecting' && (
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0.625rem 1rem',
+                    background: locationStatus === 'success' ? 'var(--bg-card)' : 'rgba(251, 191, 36, 0.08)',
+                    borderRadius: 'var(--radius-lg)',
+                    border: `1px solid ${locationStatus === 'success' ? 'var(--border-subtle)' : 'rgba(251, 191, 36, 0.25)'}`,
+                    marginBottom: 'var(--spacing-xl)',
+                    fontSize: '0.8125rem',
+                    color: 'var(--text-secondary)'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <MapPinIcon size={15} style={{ color: locationStatus === 'success' ? 'var(--success)' : 'var(--warning)' }} />
+                        <span>
+                            {locationStatus === 'success' ? (
+                                <>Using your live coordinates ({location.lat?.toFixed(3)}, {location.lng?.toFixed(3)})</>
                             ) : (
-                                <>📍 Update Location</>
+                                <>Location permission not granted. Showing featured studios in Delhi.</>
                             )}
-                        </button>
-                        <button
-                            className="btn btn-secondary"
-                            onClick={fetchSalons}
-                        >
-                            🔄 Refresh
-                        </button>
+                        </span>
                     </div>
+
+                    <span style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>
+                        {filteredSalons.length} {filteredSalons.length === 1 ? 'studio' : 'studios'} available
+                    </span>
                 </div>
+            )}
 
-                {/* Location Status */}
-                {locationStatus !== 'detecting' && (
-                    <div style={{
-                        marginBottom: 'var(--spacing-lg)',
-                        padding: 'var(--spacing-md)',
-                        borderRadius: 'var(--radius-md)',
-                        background: locationStatus === 'success' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-                        border: `1px solid ${locationStatus === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`,
-                        fontSize: '0.875rem'
-                    }}>
-                        {locationStatus === 'success' ? (
-                            <span style={{ color: 'var(--success)' }}>
-                                ✅ Using your current location ({location.lat?.toFixed(4)}, {location.lng?.toFixed(4)})
-                            </span>
-                        ) : (
-                            <span style={{ color: 'var(--warning)' }}>
-                                ⚠️ Could not detect your location. Showing salons in Delhi.
-                                <button
-                                    onClick={requestLocation}
-                                    style={{
-                                        background: 'none',
-                                        border: 'none',
-                                        color: 'var(--primary-light)',
-                                        cursor: 'pointer',
-                                        textDecoration: 'underline',
-                                        marginLeft: 'var(--spacing-sm)'
-                                    }}
-                                >
-                                    Try again
-                                </button>
-                            </span>
-                        )}
+            {/* Salon Grid */}
+            {loading ? (
+                <div className="loading-overlay">
+                    <div className="spinner"></div>
+                    <p style={{ fontSize: '0.875rem' }}>Locating verified studios in your area...</p>
+                </div>
+            ) : filteredSalons.length === 0 ? (
+                <div className="card empty-state">
+                    <div className="empty-state-icon">
+                        <SearchIcon size={24} />
                     </div>
-                )}
+                    <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>No studios found within {radius} km</h3>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--spacing-lg)', maxWidth: '420px', margin: '0 auto var(--spacing-lg)' }}>
+                        Try expanding your distance radius or search for another service category.
+                    </p>
+                    <button className="btn btn-primary" onClick={() => setRadius(25)}>
+                        Expand Radius to 25 km
+                    </button>
+                </div>
+            ) : (
+                <div className="salon-grid">
+                    {filteredSalons.map((salon, index) => {
+                        const coverImg = (salon.coverImage && salon.coverImage.startsWith('http'))
+                            ? salon.coverImage
+                            : defaultImages[index % defaultImages.length];
 
-                {/* Salon Grid */}
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: 'var(--spacing-3xl)' }}>
-                        <div className="spinner" style={{ margin: '0 auto' }}></div>
-                        <p className="loading-text" style={{ marginTop: 'var(--spacing-lg)' }}>
-                            Finding salons near you...
-                        </p>
-                    </div>
-                ) : salons.length === 0 ? (
-                    <div className="glass-card empty-state">
-                        <div className="empty-state-icon">🔍</div>
-                        <h3>No salons found nearby</h3>
-                        <p>Try increasing the search radius or check back later.</p>
-                        <button className="btn btn-primary" onClick={() => setRadius(10)}>
-                            Expand to 10 km
-                        </button>
-                    </div>
-                ) : (
-                    <>
-                        <p style={{
-                            color: 'var(--text-secondary)',
-                            marginBottom: 'var(--spacing-lg)',
-                            fontSize: '0.9375rem'
-                        }}>
-                            Found <strong style={{ color: 'var(--primary-light)' }}>{salons.length}</strong> salons within {radius} km
-                        </p>
-                        <div className="salon-grid">
-                            {salons.map((salon, index) => (
-                                <Link
-                                    to={`/salons/${salon._id}`}
-                                    key={salon._id}
-                                    style={{ textDecoration: 'none' }}
-                                    className={`fade-in-up stagger-${(index % 4) + 1}`}
-                                >
-                                    <div className="salon-card">
-                                        <div className="salon-image-wrapper">
-                                            <img
-                                                src={salon.coverImage || 'https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400'}
-                                                alt={salon.name}
-                                                className="salon-image"
-                                            />
-                                        </div>
-                                        <div className="salon-content">
+                        const distanceDisplay = salon.distanceKm !== undefined
+                            ? `${salon.distanceKm} km`
+                            : salon.distance
+                                ? `${(salon.distance / 1000).toFixed(1)} km`
+                                : null;
+
+                        return (
+                            <Link
+                                to={`/salons/${salon._id}`}
+                                key={salon._id}
+                                style={{ textDecoration: 'none' }}
+                            >
+                                <div className="salon-card">
+                                    <div className="salon-image-wrapper">
+                                        <img
+                                            src={coverImg}
+                                            alt={salon.name}
+                                            className="salon-image"
+                                            loading="lazy"
+                                        />
+
+                                        {distanceDisplay && (
+                                            <span className="salon-distance-tag">
+                                                <MapPinIcon size={12} />
+                                                <span>{distanceDisplay}</span>
+                                            </span>
+                                        )}
+
+                                        {salon.isVerified && (
+                                            <span className="salon-verified-tag">
+                                                <ShieldCheckIcon size={12} />
+                                                <span>Verified</span>
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <div className="salon-content">
+                                        <div className="salon-header-row">
                                             <h3 className="salon-name">{salon.name}</h3>
-                                            <div className="salon-location">
-                                                📍 {salon.location?.city || salon.location?.formattedAddress || 'Location'}
+                                            <div className="salon-rating-pill">
+                                                <StarIcon size={13} filled={true} />
+                                                <span>{salon.averageRating ? salon.averageRating.toFixed(1) : '4.8'}</span>
                                             </div>
-                                            <div className="salon-rating">
-                                                ⭐ {salon.averageRating?.toFixed(1) || 'New'}
-                                                <span style={{ color: 'var(--text-muted)', marginLeft: 'var(--spacing-sm)', fontWeight: '400' }}>
-                                                    ({salon.totalReviews || 0} reviews)
+                                        </div>
+
+                                        <div className="salon-location-text">
+                                            <MapPinIcon size={13} style={{ flexShrink: 0 }} />
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {salon.location?.city || salon.location?.formattedAddress || 'Location specified'}
+                                            </span>
+                                        </div>
+
+                                        <p style={{
+                                            color: 'var(--text-muted)',
+                                            fontSize: '0.8125rem',
+                                            lineHeight: '1.5',
+                                            marginBottom: 'var(--spacing-md)',
+                                            display: '-webkit-box',
+                                            WebkitLineClamp: 2,
+                                            WebkitBoxOrient: 'vertical',
+                                            overflow: 'hidden'
+                                        }}>
+                                            {salon.description || 'Premium grooming & styling services with certified professionals.'}
+                                        </p>
+
+                                        <div className="salon-footer-row">
+                                            <div>
+                                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block' }}>
+                                                    Reviews
+                                                </span>
+                                                <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
+                                                    {salon.totalReviews || 12} customer reviews
                                                 </span>
                                             </div>
-                                            <span className="salon-distance">
-                                                📍 {salon.distanceKm || (salon.distance / 1000).toFixed(1)} km away
+
+                                            <span className="btn btn-secondary btn-sm" style={{ pointerEvents: 'none' }}>
+                                                <span>Book Slot</span>
+                                                <ArrowRightIcon size={13} />
                                             </span>
                                         </div>
                                     </div>
-                                </Link>
-                            ))}
-                        </div>
-                    </>
-                )}
-            </div>
+                                </div>
+                            </Link>
+                        );
+                    })}
+                </div>
+            )}
         </div>
     );
 };

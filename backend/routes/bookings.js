@@ -12,16 +12,18 @@ const {
     getTodayBookings
 } = require('../controllers/bookingController');
 
-// Customer routes
+// Customer routes (specific routes before /:id)
 router.post('/', protect, authorize('customer'), createBooking);
 router.get('/my', protect, getMyBookings);
 router.get('/upcoming', protect, authorize('customer'), getUpcomingBookings);
-router.get('/:id', protect, getBooking);
-router.put('/:id/cancel', protect, cancelBooking);
 
-// Salon owner routes
+// Salon owner routes (specific routes before /:id)
 router.get('/salon/all', protect, authorize('salonOwner'), getSalonBookings);
 router.get('/salon/today', protect, authorize('salonOwner'), getTodayBookings);
 router.put('/:id/status', protect, authorize('salonOwner'), updateBookingStatus);
+
+// Generic parameterized routes
+router.get('/:id', protect, getBooking);
+router.put('/:id/cancel', protect, cancelBooking);
 
 module.exports = router;

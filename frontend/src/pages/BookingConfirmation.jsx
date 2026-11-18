@@ -2,6 +2,15 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { bookingAPI } from '../services/api';
 import { format } from 'date-fns';
+import {
+    CheckCircleIcon,
+    CalendarIcon,
+    ClockIcon,
+    MapPinIcon,
+    PhoneIcon,
+    ScissorsIcon,
+    ArrowRightIcon
+} from '../components/Icons';
 
 const BookingConfirmation = () => {
     const { id } = useParams();
@@ -27,193 +36,165 @@ const BookingConfirmation = () => {
         return (
             <div className="loading-overlay">
                 <div className="spinner"></div>
-                <p className="loading-text">Loading booking details...</p>
+                <p style={{ fontSize: '0.875rem' }}>Retrieving your booking confirmation...</p>
             </div>
         );
     }
 
     if (!booking) {
         return (
-            <div className="container" style={{ padding: 'var(--spacing-xl)', textAlign: 'center' }}>
-                <div className="glass-card empty-state">
-                    <div className="empty-state-icon">🔍</div>
-                    <h2>Booking not found</h2>
-                    <p>We couldn't find this booking. It may have been cancelled or doesn't exist.</p>
+            <div className="container" style={{ padding: 'var(--spacing-3xl) var(--spacing-lg)', textAlign: 'center' }}>
+                <div className="card empty-state" style={{ maxWidth: '500px', margin: '0 auto' }}>
+                    <h2>Appointment Not Found</h2>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--spacing-lg)' }}>
+                        We could not retrieve this reservation record.
+                    </p>
                     <Link to="/dashboard" className="btn btn-primary">
-                        Go to Dashboard
+                        Return to Dashboard
                     </Link>
                 </div>
             </div>
         );
     }
 
+    const bookingDateFormatted = booking.bookingDate
+        ? format(new Date(booking.bookingDate), 'EEEE, MMMM d, yyyy')
+        : 'Confirmed Date';
+
     return (
-        <div className="container" style={{ padding: 'var(--spacing-xl) var(--spacing-lg)', maxWidth: '640px' }}>
-            <div className="glass-card fade-in" style={{ textAlign: 'center' }}>
-                {/* Success Animation */}
+        <div className="container" style={{ padding: 'var(--spacing-3xl) var(--spacing-lg)', maxWidth: '680px' }}>
+            <div className="card" style={{ padding: 'var(--spacing-2xl)' }}>
+                {/* Checkmark Badge */}
                 <div className="success-checkmark">
-                    ✓
+                    <CheckCircleIcon size={32} />
                 </div>
 
-                <h1 style={{ marginBottom: 'var(--spacing-sm)', fontSize: '1.75rem' }}>Booking Confirmed!</h1>
-                <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--spacing-xl)' }}>
-                    Your appointment has been successfully booked.
-                </p>
+                <div style={{ textAlign: 'center', marginBottom: 'var(--spacing-xl)' }}>
+                    <span className="badge badge-success" style={{ marginBottom: '0.5rem' }}>
+                        Reservation Guaranteed
+                    </span>
+                    <h1 style={{ fontSize: '1.75rem', marginBottom: '0.375rem' }}>Appointment Confirmed</h1>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                        Reference Code: <strong style={{ color: 'var(--accent-primary)', letterSpacing: '0.05em' }}>#{booking._id?.slice(-8).toUpperCase()}</strong>
+                    </p>
+                </div>
 
-                {/* Booking Details Card */}
+                {/* Studio & Time Summary Card */}
                 <div style={{
-                    background: 'rgba(0, 0, 0, 0.3)',
+                    background: 'var(--bg-canvas)',
+                    border: '1px solid var(--border-subtle)',
                     borderRadius: 'var(--radius-xl)',
-                    padding: 'var(--spacing-xl)',
-                    textAlign: 'left',
-                    marginBottom: 'var(--spacing-xl)',
-                    border: '1px solid var(--border-glass)'
+                    padding: 'var(--spacing-lg)',
+                    marginBottom: 'var(--spacing-xl)'
                 }}>
-                    <h3 style={{
-                        marginBottom: 'var(--spacing-lg)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--spacing-sm)'
-                    }}>
-                        <span style={{
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: 'var(--spacing-md)' }}>
+                        <div style={{
                             width: '40px',
                             height: '40px',
                             borderRadius: 'var(--radius-md)',
-                            background: 'var(--primary-gradient-soft)',
+                            background: 'var(--accent-soft)',
+                            color: 'var(--accent-primary)',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '1.25rem'
-                        }}>💇</span>
-                        {booking.salon?.name}
-                    </h3>
-
-                    <div style={{ display: 'grid', gap: 'var(--spacing-lg)' }}>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 'var(--spacing-md)',
-                            padding: 'var(--spacing-md)',
-                            background: 'var(--bg-glass)',
-                            borderRadius: 'var(--radius-md)'
+                            justifyContent: 'center'
                         }}>
-                            <span style={{ fontSize: '1.25rem' }}>📅</span>
-                            <div>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Date & Time</p>
-                                <p style={{ fontWeight: '600', margin: 0 }}>
-                                    {format(new Date(booking.bookingDate), 'EEEE, MMMM d, yyyy')}
-                                </p>
-                                <p style={{ color: 'var(--primary-light)', fontWeight: '600', margin: 0 }}>
-                                    at {booking.bookingTime}
-                                </p>
-                            </div>
+                            <ScissorsIcon size={20} />
+                        </div>
+                        <div>
+                            <h3 style={{ fontSize: '1.125rem' }}>{booking.salon?.name || 'Studio'}</h3>
+                            {booking.salon?.phone && (
+                                <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
+                                    Tel: {booking.salon.phone}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                        gap: 'var(--spacing-md)',
+                        paddingTop: 'var(--spacing-md)',
+                        borderTop: '1px solid var(--border-subtle)'
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                            <CalendarIcon size={16} style={{ color: 'var(--accent-primary)' }} />
+                            <span>{bookingDateFormatted}</span>
                         </div>
 
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 'var(--spacing-md)',
-                            padding: 'var(--spacing-md)',
-                            background: 'var(--bg-glass)',
-                            borderRadius: 'var(--radius-md)'
-                        }}>
-                            <span style={{ fontSize: '1.25rem' }}>💇</span>
-                            <div style={{ flex: 1 }}>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Services</p>
-                                {booking.services.map((s, i) => (
-                                    <div key={i} style={{
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        marginBottom: i < booking.services.length - 1 ? 'var(--spacing-xs)' : 0
-                                    }}>
-                                        <span style={{ fontWeight: '500' }}>{s.name}</span>
-                                        <span style={{ color: 'var(--text-secondary)' }}>₹{s.price}</span>
-                                    </div>
-                                ))}
-                            </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                            <ClockIcon size={16} style={{ color: 'var(--accent-primary)' }} />
+                            <span>Time: {booking.bookingTime}</span>
                         </div>
 
-                        <div style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: 'var(--spacing-lg)',
-                            background: 'var(--primary-gradient-soft)',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid rgba(139, 92, 246, 0.2)'
-                        }}>
-                            <span style={{ fontWeight: '500' }}>Total Amount</span>
-                            <span style={{
-                                fontWeight: '800',
-                                fontSize: '1.5rem',
-                                background: 'var(--primary-gradient)',
-                                WebkitBackgroundClip: 'text',
-                                WebkitTextFillColor: 'transparent'
-                            }}>
-                                ₹{booking.totalAmount}
-                            </span>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--spacing-md)' }}>
+                        {booking.salon?.location?.formattedAddress && (
                             <div style={{
-                                padding: 'var(--spacing-md)',
-                                background: 'var(--bg-glass)',
-                                borderRadius: 'var(--radius-md)'
+                                gridColumn: '1 / -1',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                fontSize: '0.8125rem',
+                                color: 'var(--text-secondary)'
                             }}>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Status</p>
-                                <span className="badge badge-success">{booking.status}</span>
+                                <MapPinIcon size={15} style={{ flexShrink: 0 }} />
+                                <span>{booking.salon.location.formattedAddress}</span>
                             </div>
-                            <div style={{
-                                padding: 'var(--spacing-md)',
-                                background: 'var(--bg-glass)',
-                                borderRadius: 'var(--radius-md)'
-                            }}>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Booking ID</p>
-                                <p style={{ fontWeight: '500', margin: 0, fontSize: '0.875rem', fontFamily: 'monospace' }}>
-                                    #{booking._id.slice(-8).toUpperCase()}
-                                </p>
-                            </div>
-                        </div>
+                        )}
+                    </div>
+                </div>
 
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 'var(--spacing-md)',
-                            padding: 'var(--spacing-md)',
-                            background: 'var(--bg-glass)',
-                            borderRadius: 'var(--radius-md)'
-                        }}>
-                            <span style={{ fontSize: '1.25rem' }}>📍</span>
-                            <div>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Location</p>
-                                <p style={{ margin: 0 }}>{booking.salon?.location?.formattedAddress || 'View on map'}</p>
+                {/* Services Ledger */}
+                <div style={{ marginBottom: 'var(--spacing-xl)' }}>
+                    <h4 style={{ fontSize: '0.9375rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                        Reserved Services
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {booking.services?.map((svc, i) => (
+                            <div
+                                key={i}
+                                style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    padding: '0.625rem 0.875rem',
+                                    background: 'var(--bg-canvas)',
+                                    borderRadius: 'var(--radius-md)',
+                                    fontSize: '0.875rem'
+                                }}
+                            >
+                                <span style={{ color: 'var(--text-primary)', fontWeight: '500' }}>
+                                    {svc.name}
+                                </span>
+                                <span style={{ color: 'var(--accent-text)', fontWeight: '600' }}>
+                                    ₹{svc.price}
+                                </span>
                             </div>
-                        </div>
+                        ))}
+                    </div>
 
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 'var(--spacing-md)',
-                            padding: 'var(--spacing-md)',
-                            background: 'var(--bg-glass)',
-                            borderRadius: 'var(--radius-md)'
-                        }}>
-                            <span style={{ fontSize: '1.25rem' }}>📞</span>
-                            <div>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: '0 0 var(--spacing-xs)' }}>Contact</p>
-                                <p style={{ margin: 0 }}>{booking.salon?.phone}</p>
-                            </div>
-                        </div>
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginTop: 'var(--spacing-md)',
+                        paddingTop: 'var(--spacing-md)',
+                        borderTop: '1px solid var(--border-subtle)'
+                    }}>
+                        <span style={{ fontSize: '1rem', fontWeight: '700' }}>Total Amount</span>
+                        <span style={{ fontFamily: 'var(--font-heading)', fontSize: '1.5rem', fontWeight: '800', color: 'var(--accent-text)' }}>
+                            ₹{booking.totalAmount}
+                        </span>
                     </div>
                 </div>
 
                 {/* Action Buttons */}
-                <div style={{ display: 'flex', gap: 'var(--spacing-md)', justifyContent: 'center', flexWrap: 'wrap' }}>
-                    <Link to="/dashboard" className="btn btn-primary">
-                        📅 View My Bookings
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <Link to="/dashboard" className="btn btn-primary" style={{ flex: 1 }}>
+                        <span>View My Appointments</span>
+                        <ArrowRightIcon size={15} />
                     </Link>
                     <Link to="/salons" className="btn btn-secondary">
-                        🔍 Book Another
+                        Browse More Studios
                     </Link>
                 </div>
             </div>

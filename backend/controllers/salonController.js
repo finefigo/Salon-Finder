@@ -1,6 +1,7 @@
 const { body } = require('express-validator');
 const Salon = require('../models/Salon');
 const Service = require('../models/Service');
+const { calculateDistance } = require('../utils/distanceCalculator');
 
 /**
  * Salon Controller
@@ -105,75 +106,113 @@ exports.getNearbySalons = async (req, res, next) => {
 
         const latitude = parseFloat(lat);
         const longitude = parseFloat(lng);
-        const maxDistance = parseFloat(radius) * 1000; // Convert km to meters
+        const radiusKm = parseFloat(radius);
+        const maxDistance = radiusKm * 1000; // Convert km to meters
 
-        // Aggregation pipeline for geospatial query
-        const pipeline = [
-            {
-                $geoNear: {
-                    near: {
-                        type: 'Point',
-                        coordinates: [longitude, latitude]
-                    },
-                    distanceField: 'distance',
-                    maxDistance: maxDistance,
-                    spherical: true
+        try {
+            // Aggregation pipeline for geospatial query
+            const pipeline = [
+                {
+                    $geoNear: {
+                        near: {
+                            type: 'Point',
+                            coordinates: [longitude, latitude]
+                        },
+                        distanceField: 'distance',
+                        maxDistance: maxDistance,
+                        spherical: true
+                    }
+                },
+                {
+                    $match: {
+                        isVerified: true,
+                        isActive: true
+                    }
                 }
-            },
-            {
-                $match: {
-                    isVerified: true,
-                    isActive: true
-                }
+            ];
+
+            // Add sorting
+            if (sortBy === 'rating') {
+                pipeline.push({ $sort: { averageRating: -1, distance: 1 } });
+            } else {
+                pipeline.push({ $sort: { distance: 1 } });
             }
-        ];
 
-        // Add sorting
-        if (sortBy === 'rating') {
-            pipeline.push({ $sort: { averageRating: -1, distance: 1 } });
-        } else {
-            pipeline.push({ $sort: { distance: 1 } });
+            // Pagination
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+            pipeline.push({ $skip: skip });
+            pipeline.push({ $limit: parseInt(limit) });
+
+            // Add distance in km
+            pipeline.push({
+                $addFields: {
+                    distanceKm: { $round: [{ $divide: ['$distance', 1000] }, 2] }
+                }
+            });
+
+            const salons = await Salon.aggregate(pipeline);
+
+            // Get total count for pagination
+            const countPipeline = [
+                {
+                    $geoNear: {
+                        near: { type: 'Point', coordinates: [longitude, latitude] },
+                        distanceField: 'distance',
+                        maxDistance: maxDistance,
+                        spherical: true
+                    }
+                },
+                { $match: { isVerified: true, isActive: true } },
+                { $count: 'total' }
+            ];
+
+            const countResult = await Salon.aggregate(countPipeline);
+            const total = countResult.length > 0 ? countResult[0].total : 0;
+
+            return res.status(200).json({
+                success: true,
+                count: salons.length,
+                total,
+                page: parseInt(page),
+                pages: Math.ceil(total / parseInt(limit)) || 1,
+                data: salons
+            });
+        } catch (geoError) {
+            console.warn('Geospatial aggregation fallback engaged:', geoError.message);
+            // Fallback: Haversine distance in memory if 2dsphere index is pending
+            const allSalons = await Salon.find({ isVerified: true, isActive: true });
+            
+            const withDistance = allSalons.map(s => {
+                const sLat = s.location?.coordinates?.[1];
+                const sLng = s.location?.coordinates?.[0];
+                const dist = (sLat !== undefined && sLng !== undefined)
+                    ? calculateDistance(latitude, longitude, sLat, sLng)
+                    : 999;
+                
+                const sObj = s.toObject ? s.toObject() : s;
+                sObj.distance = dist * 1000;
+                sObj.distanceKm = dist;
+                return sObj;
+            }).filter(s => s.distanceKm <= radiusKm);
+
+            if (sortBy === 'rating') {
+                withDistance.sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0) || a.distanceKm - b.distanceKm);
+            } else {
+                withDistance.sort((a, b) => a.distanceKm - b.distanceKm);
+            }
+
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+            const paginated = withDistance.slice(skip, skip + parseInt(limit));
+
+            return res.status(200).json({
+                success: true,
+                count: paginated.length,
+                total: withDistance.length,
+                page: parseInt(page),
+                pages: Math.ceil(withDistance.length / parseInt(limit)) || 1,
+                data: paginated
+            });
         }
-
-        // Pagination
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        pipeline.push({ $skip: skip });
-        pipeline.push({ $limit: parseInt(limit) });
-
-        // Add distance in km
-        pipeline.push({
-            $addFields: {
-                distanceKm: { $round: [{ $divide: ['$distance', 1000] }, 2] }
-            }
-        });
-
-        const salons = await Salon.aggregate(pipeline);
-
-        // Get total count for pagination
-        const countPipeline = [
-            {
-                $geoNear: {
-                    near: { type: 'Point', coordinates: [longitude, latitude] },
-                    distanceField: 'distance',
-                    maxDistance: maxDistance,
-                    spherical: true
-                }
-            },
-            { $match: { isVerified: true, isActive: true } },
-            { $count: 'total' }
-        ];
-
-        const countResult = await Salon.aggregate(countPipeline);
-        const total = countResult.length > 0 ? countResult[0].total : 0;
-
-        res.status(200).json({
-            success: true,
-            count: salons.length,
-            total,
-            page: parseInt(page),
-            pages: Math.ceil(total / parseInt(limit)),
-            data: salons
-        });
     } catch (error) {
         next(error);
     }
@@ -190,14 +229,19 @@ exports.getSalons = async (req, res, next) => {
 
         const query = { isVerified: true, isActive: true };
 
-        // Search by name or description
-        if (search) {
-            query.$text = { $search: search };
+        // Search by name or description with regex for maximum compatibility
+        if (search && search.trim()) {
+            const regex = new RegExp(search.trim(), 'i');
+            query.$or = [
+                { name: regex },
+                { description: regex },
+                { 'location.city': regex }
+            ];
         }
 
         // Filter by city
-        if (city) {
-            query['location.city'] = new RegExp(city, 'i');
+        if (city && city.trim()) {
+            query['location.city'] = new RegExp(city.trim(), 'i');
         }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -214,7 +258,7 @@ exports.getSalons = async (req, res, next) => {
             count: salons.length,
             total,
             page: parseInt(page),
-            pages: Math.ceil(total / parseInt(limit)),
+            pages: Math.ceil(total / parseInt(limit)) || 1,
             data: salons
         });
     } catch (error) {

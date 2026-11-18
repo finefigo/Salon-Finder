@@ -15,13 +15,13 @@ const {
     createSalonValidation
 } = require('../controllers/salonController');
 
-// Public routes
+// Specific routes MUST come before parameterized /:id routes
 router.get('/nearby', getNearbySalons);
+router.get('/owner/my', protect, authorize('salonOwner'), getMySalon);
 router.get('/', getSalons);
 router.get('/:id', getSalon);
 
 // Salon owner routes
-router.get('/owner/my', protect, authorize('salonOwner'), getMySalon);
 router.post('/', protect, authorize('salonOwner'), createSalonValidation, validate, createSalon);
 router.put('/:id', protect, authorize('salonOwner', 'admin'), updateSalon);
 
