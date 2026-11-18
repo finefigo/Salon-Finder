@@ -15,10 +15,9 @@ const errorHandler = (err, req, res, next) => {
         error = { message, statusCode: 404 };
     }
 
-    // Mongoose duplicate key
-    if (err.code === 11000) {
-        const field = Object.keys(err.keyValue)[0];
-        const message = `Duplicate field value: ${field}. Please use another value`;
+    // MySQL duplicate key
+    if (err.code === 'ER_DUP_ENTRY' || err.code === 11000) {
+        const message = 'Duplicate entry. A record with this information already exists.';
         error = { message, statusCode: 400 };
     }
 

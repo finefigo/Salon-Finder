@@ -1,12 +1,6 @@
 const { body } = require('express-validator');
-const Salon = require('../models/Salon');
-const Service = require('../models/Service');
-const { calculateDistance } = require('../utils/distanceCalculator');
-
-/**
- * Salon Controller
- * Handles salon CRUD operations and geospatial queries
- */
+const { randomUUID: uuidv4 } = require('crypto');
+const db = require('../config/db');
 
 // Validation rules
 exports.createSalonValidation = [
@@ -15,6 +9,43 @@ exports.createSalonValidation = [
     body('latitude').isFloat({ min: -90, max: 90 }).withMessage('Valid latitude is required'),
     body('longitude').isFloat({ min: -180, max: 180 }).withMessage('Valid longitude is required')
 ];
+
+// Helper to format salon object for frontend compatibility
+const formatSalon = (row) => {
+    if (!row) return null;
+    let workingHours = row.workingHours;
+    if (typeof workingHours === 'string') {
+        try { workingHours = JSON.parse(workingHours); } catch (e) {}
+    }
+    let amenities = row.amenities;
+    if (typeof amenities === 'string') {
+        try { amenities = JSON.parse(amenities); } catch (e) {}
+    }
+    let images = row.images;
+    if (typeof images === 'string') {
+        try { images = JSON.parse(images); } catch (e) {}
+    }
+
+    return {
+        ...row,
+        _id: row.id,
+        location: {
+            type: 'Point',
+            coordinates: [row.longitude, row.latitude],
+            formattedAddress: row.formattedAddress || `${row.street || ''}, ${row.city || ''}`,
+            street: row.street,
+            city: row.city,
+            state: row.state,
+            zipcode: row.zipcode,
+            country: row.country
+        },
+        workingHours: workingHours || {},
+        amenities: amenities || [],
+        images: images || [],
+        distanceKm: row.distanceKm !== undefined ? parseFloat(row.distanceKm) : undefined,
+        distance: row.distanceKm !== undefined ? parseFloat(row.distanceKm) * 1000 : undefined
+    };
+};
 
 /**
  * @desc    Create a new salon
@@ -36,52 +67,49 @@ exports.createSalon = async (req, res, next) => {
             zipcode,
             country,
             workingHours,
-            slotDuration,
-            amenities
+            slotDuration = 30,
+            amenities = []
         } = req.body;
 
         // Check if owner already has a salon
-        const existingSalon = await Salon.findOne({ owner: req.user.id });
-        if (existingSalon) {
+        const existing = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (existing.length > 0) {
             return res.status(400).json({
                 success: false,
-                message: 'You already have a registered salon. Please edit your existing salon.'
+                message: 'You already have a registered salon. Please edit your existing studio.'
             });
         }
 
-        // Create salon
-        const salon = await Salon.create({
-            name,
-            description,
-            owner: req.user.id,
-            phone,
-            email,
-            location: {
-                type: 'Point',
-                coordinates: [longitude, latitude],
-                formattedAddress: address,
-                city,
-                state,
-                zipcode,
-                country
-            },
-            workingHours: workingHours || {
-                monday: { open: '09:00', close: '20:00', isClosed: false },
-                tuesday: { open: '09:00', close: '20:00', isClosed: false },
-                wednesday: { open: '09:00', close: '20:00', isClosed: false },
-                thursday: { open: '09:00', close: '20:00', isClosed: false },
-                friday: { open: '09:00', close: '20:00', isClosed: false },
-                saturday: { open: '09:00', close: '20:00', isClosed: false },
-                sunday: { open: '10:00', close: '18:00', isClosed: true }
-            },
-            slotDuration: slotDuration || 30,
-            amenities
-        });
+        const id = uuidv4();
+        const defaultHours = workingHours || {
+            monday: { open: '09:00', close: '20:00', isClosed: false },
+            tuesday: { open: '09:00', close: '20:00', isClosed: false },
+            wednesday: { open: '09:00', close: '20:00', isClosed: false },
+            thursday: { open: '09:00', close: '20:00', isClosed: false },
+            friday: { open: '09:00', close: '20:00', isClosed: false },
+            saturday: { open: '09:00', close: '20:00', isClosed: false },
+            sunday: { open: '10:00', close: '18:00', isClosed: true }
+        };
+
+        await db.query(`
+            INSERT INTO salons (
+                id, name, description, ownerId, phone, email,
+                latitude, longitude, formattedAddress, city, state, zipcode, country,
+                workingHours, slotDuration, amenities, isVerified, isActive
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            id, name, description || '', req.user.id, phone, email || null,
+            parseFloat(latitude), parseFloat(longitude), address || '', city || '', state || '', zipcode || '', country || 'India',
+            JSON.stringify(defaultHours), parseInt(slotDuration), JSON.stringify(amenities),
+            false, true
+        ]);
+
+        const [created] = await db.query('SELECT * FROM salons WHERE id = ?', [id]);
 
         res.status(201).json({
             success: true,
-            message: 'Salon created successfully. Awaiting verification.',
-            data: salon
+            message: 'Studio registered successfully. Awaiting verification.',
+            data: formatSalon(created)
         });
     } catch (error) {
         next(error);
@@ -95,7 +123,7 @@ exports.createSalon = async (req, res, next) => {
  */
 exports.getNearbySalons = async (req, res, next) => {
     try {
-        const { lat, lng, radius = 5, page = 1, limit = 10, sortBy = 'distance' } = req.query;
+        const { lat, lng, radius = 10, page = 1, limit = 10, sortBy = 'distance' } = req.query;
 
         if (!lat || !lng) {
             return res.status(400).json({
@@ -107,112 +135,53 @@ exports.getNearbySalons = async (req, res, next) => {
         const latitude = parseFloat(lat);
         const longitude = parseFloat(lng);
         const radiusKm = parseFloat(radius);
-        const maxDistance = radiusKm * 1000; // Convert km to meters
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const offset = (pageNum - 1) * limitNum;
 
-        try {
-            // Aggregation pipeline for geospatial query
-            const pipeline = [
-                {
-                    $geoNear: {
-                        near: {
-                            type: 'Point',
-                            coordinates: [longitude, latitude]
-                        },
-                        distanceField: 'distance',
-                        maxDistance: maxDistance,
-                        spherical: true
-                    }
-                },
-                {
-                    $match: {
-                        isVerified: true,
-                        isActive: true
-                    }
-                }
-            ];
+        const orderClause = sortBy === 'rating'
+            ? 'ORDER BY averageRating DESC, distanceKm ASC'
+            : 'ORDER BY distanceKm ASC';
 
-            // Add sorting
-            if (sortBy === 'rating') {
-                pipeline.push({ $sort: { averageRating: -1, distance: 1 } });
-            } else {
-                pipeline.push({ $sort: { distance: 1 } });
-            }
+        // Haversine query on TiDB
+        const rows = await db.query(`
+            SELECT s.*,
+                ROUND(6371 * acos(
+                    cos(radians(?)) * cos(radians(s.latitude)) *
+                    cos(radians(s.longitude) - radians(?)) +
+                    sin(radians(?)) * sin(radians(s.latitude))
+                ), 2) AS distanceKm
+            FROM salons s
+            WHERE s.isVerified = 1 AND s.isActive = 1
+            HAVING distanceKm <= ?
+            ${orderClause}
+            LIMIT ? OFFSET ?
+        `, [latitude, longitude, latitude, radiusKm, limitNum, offset]);
 
-            // Pagination
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-            pipeline.push({ $skip: skip });
-            pipeline.push({ $limit: parseInt(limit) });
+        const countResult = await db.query(`
+            SELECT COUNT(*) as total FROM (
+                SELECT s.id,
+                    ROUND(6371 * acos(
+                        cos(radians(?)) * cos(radians(s.latitude)) *
+                        cos(radians(s.longitude) - radians(?)) +
+                        sin(radians(?)) * sin(radians(s.latitude))
+                    ), 2) AS distanceKm
+                FROM salons s
+                WHERE s.isVerified = 1 AND s.isActive = 1
+                HAVING distanceKm <= ?
+            ) sub
+        `, [latitude, longitude, latitude, radiusKm]);
 
-            // Add distance in km
-            pipeline.push({
-                $addFields: {
-                    distanceKm: { $round: [{ $divide: ['$distance', 1000] }, 2] }
-                }
-            });
+        const total = countResult[0]?.total || 0;
 
-            const salons = await Salon.aggregate(pipeline);
-
-            // Get total count for pagination
-            const countPipeline = [
-                {
-                    $geoNear: {
-                        near: { type: 'Point', coordinates: [longitude, latitude] },
-                        distanceField: 'distance',
-                        maxDistance: maxDistance,
-                        spherical: true
-                    }
-                },
-                { $match: { isVerified: true, isActive: true } },
-                { $count: 'total' }
-            ];
-
-            const countResult = await Salon.aggregate(countPipeline);
-            const total = countResult.length > 0 ? countResult[0].total : 0;
-
-            return res.status(200).json({
-                success: true,
-                count: salons.length,
-                total,
-                page: parseInt(page),
-                pages: Math.ceil(total / parseInt(limit)) || 1,
-                data: salons
-            });
-        } catch (geoError) {
-            console.warn('Geospatial aggregation fallback engaged:', geoError.message);
-            // Fallback: Haversine distance in memory if 2dsphere index is pending
-            const allSalons = await Salon.find({ isVerified: true, isActive: true });
-            
-            const withDistance = allSalons.map(s => {
-                const sLat = s.location?.coordinates?.[1];
-                const sLng = s.location?.coordinates?.[0];
-                const dist = (sLat !== undefined && sLng !== undefined)
-                    ? calculateDistance(latitude, longitude, sLat, sLng)
-                    : 999;
-                
-                const sObj = s.toObject ? s.toObject() : s;
-                sObj.distance = dist * 1000;
-                sObj.distanceKm = dist;
-                return sObj;
-            }).filter(s => s.distanceKm <= radiusKm);
-
-            if (sortBy === 'rating') {
-                withDistance.sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0) || a.distanceKm - b.distanceKm);
-            } else {
-                withDistance.sort((a, b) => a.distanceKm - b.distanceKm);
-            }
-
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-            const paginated = withDistance.slice(skip, skip + parseInt(limit));
-
-            return res.status(200).json({
-                success: true,
-                count: paginated.length,
-                total: withDistance.length,
-                page: parseInt(page),
-                pages: Math.ceil(withDistance.length / parseInt(limit)) || 1,
-                data: paginated
-            });
-        }
+        res.status(200).json({
+            success: true,
+            count: rows.length,
+            total,
+            page: pageNum,
+            pages: Math.ceil(total / limitNum) || 1,
+            data: rows.map(formatSalon)
+        });
     } catch (error) {
         next(error);
     }
@@ -226,40 +195,46 @@ exports.getNearbySalons = async (req, res, next) => {
 exports.getSalons = async (req, res, next) => {
     try {
         const { page = 1, limit = 10, search, city } = req.query;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const offset = (pageNum - 1) * limitNum;
 
-        const query = { isVerified: true, isActive: true };
+        let whereClauses = ['isVerified = 1', 'isActive = 1'];
+        let params = [];
 
-        // Search by name or description with regex for maximum compatibility
         if (search && search.trim()) {
-            const regex = new RegExp(search.trim(), 'i');
-            query.$or = [
-                { name: regex },
-                { description: regex },
-                { 'location.city': regex }
-            ];
+            whereClauses.push('(name LIKE ? OR description LIKE ? OR city LIKE ?)');
+            const s = `%${search.trim()}%`;
+            params.push(s, s, s);
         }
 
-        // Filter by city
         if (city && city.trim()) {
-            query['location.city'] = new RegExp(city.trim(), 'i');
+            whereClauses.push('city LIKE ?');
+            params.push(`%${city.trim()}%`);
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-        const salons = await Salon.find(query)
-            .skip(skip)
-            .limit(parseInt(limit))
-            .sort({ averageRating: -1, createdAt: -1 });
+        const rows = await db.query(`
+            SELECT * FROM salons
+            ${whereSQL}
+            ORDER BY averageRating DESC, createdAt DESC
+            LIMIT ? OFFSET ?
+        `, [...params, limitNum, offset]);
 
-        const total = await Salon.countDocuments(query);
+        const [countRow] = await db.query(`
+            SELECT COUNT(*) as total FROM salons ${whereSQL}
+        `, params);
+
+        const total = countRow?.total || 0;
 
         res.status(200).json({
             success: true,
-            count: salons.length,
+            count: rows.length,
             total,
-            page: parseInt(page),
-            pages: Math.ceil(total / parseInt(limit)) || 1,
-            data: salons
+            page: pageNum,
+            pages: Math.ceil(total / limitNum) || 1,
+            data: rows.map(formatSalon)
         });
     } catch (error) {
         next(error);
@@ -273,23 +248,23 @@ exports.getSalons = async (req, res, next) => {
  */
 exports.getSalon = async (req, res, next) => {
     try {
-        const salon = await Salon.findById(req.params.id).populate('owner', 'name email');
+        const salons = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.id]);
 
-        if (!salon) {
+        if (salons.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Salon not found'
             });
         }
 
-        // Get services for this salon
-        const services = await Service.find({ salon: salon._id, isActive: true });
+        const salon = formatSalon(salons[0]);
+        const services = await db.query('SELECT * FROM services WHERE salonId = ? AND isActive = 1', [req.params.id]);
 
         res.status(200).json({
             success: true,
             data: {
                 salon,
-                services
+                services: services.map(s => ({ ...s, _id: s.id }))
             }
         });
     } catch (error) {
@@ -299,27 +274,28 @@ exports.getSalon = async (req, res, next) => {
 
 /**
  * @desc    Get my salon (for salon owner)
- * @route   GET /api/salons/my
+ * @route   GET /api/salons/owner/my
  * @access  Private (Salon Owner)
  */
 exports.getMySalon = async (req, res, next) => {
     try {
-        const salon = await Salon.findOne({ owner: req.user.id });
+        const salons = await db.query('SELECT * FROM salons WHERE ownerId = ?', [req.user.id]);
 
-        if (!salon) {
+        if (salons.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'You have not registered a salon yet'
             });
         }
 
-        const services = await Service.find({ salon: salon._id });
+        const salon = formatSalon(salons[0]);
+        const services = await db.query('SELECT * FROM services WHERE salonId = ?', [salon.id]);
 
         res.status(200).json({
             success: true,
             data: {
                 salon,
-                services
+                services: services.map(s => ({ ...s, _id: s.id }))
             }
         });
     } catch (error) {
@@ -334,58 +310,58 @@ exports.getMySalon = async (req, res, next) => {
  */
 exports.updateSalon = async (req, res, next) => {
     try {
-        let salon = await Salon.findById(req.params.id);
+        const salons = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.id]);
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'Salon not found'
-            });
+        if (salons.length === 0) {
+            return res.status(404).json({ success: false, message: 'Salon not found' });
         }
 
-        // Check ownership
-        if (salon.owner.toString() !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to update this salon'
-            });
+        const salon = salons[0];
+        if (salon.ownerId !== req.user.id && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, message: 'Not authorized to update this salon' });
         }
 
-        // Fields that can be updated
-        const allowedUpdates = [
-            'name', 'description', 'phone', 'email',
-            'workingHours', 'slotDuration', 'amenities', 'coverImage', 'images'
-        ];
+        const {
+            name, description, phone, email,
+            latitude, longitude, address, city, state, zipcode,
+            slotDuration, workingHours, amenities, coverImage
+        } = req.body;
 
-        const updates = {};
-        allowedUpdates.forEach(field => {
-            if (req.body[field] !== undefined) {
-                updates[field] = req.body[field];
-            }
-        });
+        await db.query(`
+            UPDATE salons SET
+                name = COALESCE(?, name),
+                description = COALESCE(?, description),
+                phone = COALESCE(?, phone),
+                email = COALESCE(?, email),
+                latitude = COALESCE(?, latitude),
+                longitude = COALESCE(?, longitude),
+                formattedAddress = COALESCE(?, formattedAddress),
+                city = COALESCE(?, city),
+                state = COALESCE(?, state),
+                zipcode = COALESCE(?, zipcode),
+                slotDuration = COALESCE(?, slotDuration),
+                workingHours = COALESCE(?, workingHours),
+                amenities = COALESCE(?, amenities),
+                coverImage = COALESCE(?, coverImage)
+            WHERE id = ?
+        `, [
+            name || null, description || null, phone || null, email || null,
+            latitude ? parseFloat(latitude) : null,
+            longitude ? parseFloat(longitude) : null,
+            address || null, city || null, state || null, zipcode || null,
+            slotDuration ? parseInt(slotDuration) : null,
+            workingHours ? JSON.stringify(workingHours) : null,
+            amenities ? JSON.stringify(amenities) : null,
+            coverImage || null,
+            req.params.id
+        ]);
 
-        // Handle location update
-        if (req.body.latitude && req.body.longitude) {
-            updates.location = {
-                type: 'Point',
-                coordinates: [req.body.longitude, req.body.latitude],
-                formattedAddress: req.body.address,
-                city: req.body.city,
-                state: req.body.state,
-                zipcode: req.body.zipcode,
-                country: req.body.country
-            };
-        }
-
-        salon = await Salon.findByIdAndUpdate(req.params.id, updates, {
-            new: true,
-            runValidators: true
-        });
+        const [updated] = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.id]);
 
         res.status(200).json({
             success: true,
-            message: 'Salon updated successfully',
-            data: salon
+            message: 'Studio profile updated',
+            data: formatSalon(updated)
         });
     } catch (error) {
         next(error);
@@ -399,39 +375,28 @@ exports.updateSalon = async (req, res, next) => {
  */
 exports.addService = async (req, res, next) => {
     try {
-        const salon = await Salon.findById(req.params.id);
+        const salons = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.id]);
+        if (salons.length === 0) return res.status(404).json({ success: false, message: 'Salon not found' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'Salon not found'
-            });
+        const salon = salons[0];
+        if (salon.ownerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        // Check ownership
-        if (salon.owner.toString() !== req.user.id) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to add services to this salon'
-            });
-        }
+        const { name, description, category = 'haircut', price, duration = 30, gender = 'unisex' } = req.body;
+        const id = uuidv4();
 
-        const { name, description, category, price, duration, gender } = req.body;
+        await db.query(`
+            INSERT INTO services (id, salonId, name, description, category, price, duration, gender)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [id, salon.id, name, description || '', category, parseFloat(price), parseInt(duration), gender]);
 
-        const service = await Service.create({
-            salon: salon._id,
-            name,
-            description,
-            category,
-            price,
-            duration: duration || 30,
-            gender: gender || 'unisex'
-        });
+        const [service] = await db.query('SELECT * FROM services WHERE id = ?', [id]);
 
         res.status(201).json({
             success: true,
             message: 'Service added successfully',
-            data: service
+            data: { ...service, _id: service.id }
         });
     } catch (error) {
         next(error);
@@ -445,39 +410,34 @@ exports.addService = async (req, res, next) => {
  */
 exports.updateService = async (req, res, next) => {
     try {
-        const salon = await Salon.findById(req.params.salonId);
+        const salons = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.salonId]);
+        if (salons.length === 0) return res.status(404).json({ success: false, message: 'Salon not found' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'Salon not found'
-            });
+        if (salons[0].ownerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        // Check ownership
-        if (salon.owner.toString() !== req.user.id) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
+        const { name, category, price, duration } = req.body;
 
-        const service = await Service.findOneAndUpdate(
-            { _id: req.params.serviceId, salon: salon._id },
-            req.body,
-            { new: true, runValidators: true }
-        );
+        await db.query(`
+            UPDATE services SET
+                name = COALESCE(?, name),
+                category = COALESCE(?, category),
+                price = COALESCE(?, price),
+                duration = COALESCE(?, duration)
+            WHERE id = ? AND salonId = ?
+        `, [
+            name || null, category || null,
+            price ? parseFloat(price) : null,
+            duration ? parseInt(duration) : null,
+            req.params.serviceId, req.params.salonId
+        ]);
 
-        if (!service) {
-            return res.status(404).json({
-                success: false,
-                message: 'Service not found'
-            });
-        }
+        const [service] = await db.query('SELECT * FROM services WHERE id = ?', [req.params.serviceId]);
 
         res.status(200).json({
             success: true,
-            data: service
+            data: { ...service, _id: service.id }
         });
     } catch (error) {
         next(error);
@@ -491,34 +451,14 @@ exports.updateService = async (req, res, next) => {
  */
 exports.deleteService = async (req, res, next) => {
     try {
-        const salon = await Salon.findById(req.params.salonId);
+        const salons = await db.query('SELECT * FROM salons WHERE id = ?', [req.params.salonId]);
+        if (salons.length === 0) return res.status(404).json({ success: false, message: 'Salon not found' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'Salon not found'
-            });
+        if (salons[0].ownerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        // Check ownership
-        if (salon.owner.toString() !== req.user.id) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
-
-        const service = await Service.findOneAndDelete({
-            _id: req.params.serviceId,
-            salon: salon._id
-        });
-
-        if (!service) {
-            return res.status(404).json({
-                success: false,
-                message: 'Service not found'
-            });
-        }
+        await db.query('DELETE FROM services WHERE id = ? AND salonId = ?', [req.params.serviceId, req.params.salonId]);
 
         res.status(200).json({
             success: true,

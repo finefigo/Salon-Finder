@@ -1,10 +1,8 @@
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { body } = require('express-validator');
-const User = require('../models/User');
-
-/**
- * Auth Controller
- * Handles user registration, login, and profile
- */
+const { randomUUID: uuidv4 } = require('crypto');
+const db = require('../config/db');
 
 // Validation rules
 exports.registerValidation = [
@@ -24,6 +22,15 @@ exports.loginValidation = [
     body('password').notEmpty().withMessage('Password is required')
 ];
 
+// Helper to sign JWT
+const signToken = (id, role) => {
+    return jwt.sign(
+        { id, role },
+        process.env.JWT_SECRET || 'salon_secret_key_change_in_production_12345',
+        { expiresIn: process.env.JWT_EXPIRE || '7d' }
+    );
+};
+
 /**
  * @desc    Register a new user
  * @route   POST /api/auth/register
@@ -31,38 +38,38 @@ exports.loginValidation = [
  */
 exports.register = async (req, res, next) => {
     try {
-        const { name, email, password, role, phone } = req.body;
+        const { name, email, password, role = 'customer', phone } = req.body;
 
         // Check if user exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
+        const existing = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (existing.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'User already exists with this email'
             });
         }
 
-        // Create user
-        const user = await User.create({
-            name,
-            email,
-            password,
-            role: role || 'customer',
-            phone
-        });
+        const id = uuidv4();
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
 
-        // Generate token
-        const token = user.getSignedJwtToken();
+        await db.query(`
+            INSERT INTO users (id, name, email, password, role, phone)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `, [id, name, email, hashedPassword, role, phone || null]);
+
+        const token = signToken(id, role);
 
         res.status(201).json({
             success: true,
             message: 'User registered successfully',
             data: {
                 user: {
-                    id: user._id,
-                    name: user.name,
-                    email: user.email,
-                    role: user.role
+                    id,
+                    _id: id,
+                    name,
+                    email,
+                    role
                 },
                 token
             }
@@ -81,17 +88,17 @@ exports.login = async (req, res, next) => {
     try {
         const { email, password } = req.body;
 
-        // Find user and include password for comparison
-        const user = await User.findOne({ email }).select('+password');
+        const users = await db.query('SELECT * FROM users WHERE email = ?', [email]);
 
-        if (!user) {
+        if (users.length === 0) {
             return res.status(401).json({
                 success: false,
                 message: 'Invalid credentials'
             });
         }
 
-        // Check if user is active
+        const user = users[0];
+
         if (!user.isActive) {
             return res.status(401).json({
                 success: false,
@@ -99,9 +106,7 @@ exports.login = async (req, res, next) => {
             });
         }
 
-        // Check password
-        const isMatch = await user.matchPassword(password);
-
+        const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(401).json({
                 success: false,
@@ -109,15 +114,15 @@ exports.login = async (req, res, next) => {
             });
         }
 
-        // Generate token
-        const token = user.getSignedJwtToken();
+        const token = signToken(user.id, user.role);
 
         res.status(200).json({
             success: true,
             message: 'Login successful',
             data: {
                 user: {
-                    id: user._id,
+                    id: user.id,
+                    _id: user.id,
                     name: user.name,
                     email: user.email,
                     role: user.role
@@ -137,11 +142,22 @@ exports.login = async (req, res, next) => {
  */
 exports.getMe = async (req, res, next) => {
     try {
-        const user = await User.findById(req.user.id);
+        const users = await db.query(
+            'SELECT id, name, email, phone, role, avatar, latitude, longitude, address, isActive, createdAt FROM users WHERE id = ?',
+            [req.user.id]
+        );
 
+        if (users.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const user = users[0];
         res.status(200).json({
             success: true,
-            data: user
+            data: {
+                ...user,
+                _id: user.id
+            }
         });
     } catch (error) {
         next(error);
@@ -155,24 +171,18 @@ exports.getMe = async (req, res, next) => {
  */
 exports.updateProfile = async (req, res, next) => {
     try {
-        const fieldsToUpdate = {
-            name: req.body.name,
-            phone: req.body.phone
-        };
+        const { name, phone } = req.body;
+        await db.query('UPDATE users SET name = COALESCE(?, name), phone = COALESCE(?, phone) WHERE id = ?', [
+            name || null,
+            phone || null,
+            req.user.id
+        ]);
 
-        // Remove undefined fields
-        Object.keys(fieldsToUpdate).forEach(
-            key => fieldsToUpdate[key] === undefined && delete fieldsToUpdate[key]
-        );
-
-        const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
-            new: true,
-            runValidators: true
-        });
-
+        const [user] = await db.query('SELECT id, name, email, phone, role FROM users WHERE id = ?', [req.user.id]);
         res.status(200).json({
             success: true,
-            data: user
+            message: 'Profile updated successfully',
+            data: { ...user, _id: user.id }
         });
     } catch (error) {
         next(error);
@@ -187,29 +197,15 @@ exports.updateProfile = async (req, res, next) => {
 exports.updateLocation = async (req, res, next) => {
     try {
         const { latitude, longitude, address } = req.body;
-
-        if (!latitude || !longitude) {
-            return res.status(400).json({
-                success: false,
-                message: 'Latitude and longitude are required'
-            });
-        }
-
-        const user = await User.findByIdAndUpdate(
-            req.user.id,
-            {
-                location: {
-                    type: 'Point',
-                    coordinates: [longitude, latitude],
-                    address
-                }
-            },
-            { new: true }
-        );
+        await db.query(`
+            UPDATE users
+            SET latitude = ?, longitude = ?, address = ?
+            WHERE id = ?
+        `, [latitude, longitude, address || null, req.user.id]);
 
         res.status(200).json({
             success: true,
-            data: user
+            message: 'Location updated successfully'
         });
     } catch (error) {
         next(error);
@@ -225,27 +221,24 @@ exports.changePassword = async (req, res, next) => {
     try {
         const { currentPassword, newPassword } = req.body;
 
-        const user = await User.findById(req.user.id).select('+password');
+        const [user] = await db.query('SELECT password FROM users WHERE id = ?', [req.user.id]);
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
 
-        // Check current password
-        const isMatch = await user.matchPassword(currentPassword);
         if (!isMatch) {
-            return res.status(401).json({
+            return res.status(400).json({
                 success: false,
                 message: 'Current password is incorrect'
             });
         }
 
-        user.password = newPassword;
-        await user.save();
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-        // Generate new token
-        const token = user.getSignedJwtToken();
+        await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, req.user.id]);
 
         res.status(200).json({
             success: true,
-            message: 'Password updated successfully',
-            data: { token }
+            message: 'Password changed successfully'
         });
     } catch (error) {
         next(error);

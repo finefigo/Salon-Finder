@@ -1,12 +1,58 @@
-const Booking = require('../models/Booking');
-const Slot = require('../models/Slot');
-const Salon = require('../models/Salon');
-const Service = require('../models/Service');
+const { randomUUID: uuidv4 } = require('crypto');
+const db = require('../config/db');
 
-/**
- * Booking Controller
- * Handles booking creation, management, and cancellation
- */
+// Helper to normalize date to YYYY-MM-DD without UTC timezone skew
+const normalizeDate = (d) => {
+    if (!d) return null;
+    if (typeof d === 'string') return d.split('T')[0];
+    if (d instanceof Date) {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    return String(d).split('T')[0];
+};
+
+// Helper to format booking object
+const formatBooking = (b) => {
+    if (!b) return null;
+    let services = b.services;
+    if (typeof services === 'string') {
+        try { services = JSON.parse(services); } catch (e) {}
+    }
+
+    return {
+        ...b,
+        _id: b.id,
+        services: services || [],
+        customer: b.customerId ? {
+            id: b.customerId,
+            _id: b.customerId,
+            name: b.customerName,
+            email: b.customerEmail,
+            phone: b.customerPhone
+        } : null,
+        salon: b.salonId ? {
+            id: b.salonId,
+            _id: b.salonId,
+            name: b.salonName,
+            phone: b.salonPhone,
+            coverImage: b.salonCoverImage,
+            location: {
+                formattedAddress: b.salonAddress,
+                city: b.salonCity
+            }
+        } : null,
+        slot: b.slotId ? {
+            id: b.slotId,
+            _id: b.slotId,
+            date: b.slotDate || b.bookingDate,
+            startTime: b.slotStartTime || b.bookingTime,
+            endTime: b.slotEndTime
+        } : null
+    };
+};
 
 /**
  * @desc    Create a new booking
@@ -17,113 +63,88 @@ exports.createBooking = async (req, res, next) => {
     try {
         const { slotId, serviceIds, customerNotes } = req.body;
 
-        // Validate slot
         if (!slotId) {
-            return res.status(400).json({
-                success: false,
-                message: 'Slot ID is required'
-            });
+            return res.status(400).json({ success: false, message: 'Slot ID is required' });
         }
 
-        // Validate services
         if (!serviceIds || !serviceIds.length) {
+            return res.status(400).json({ success: false, message: 'At least one service is required' });
+        }
+
+        // Atomic slot reservation: update only if available
+        const updateResult = await db.query(`
+            UPDATE slots
+            SET isAvailable = 0, bookedById = ?
+            WHERE id = ? AND isAvailable = 1 AND isEnabled = 1
+        `, [req.user.id, slotId]);
+
+        if (updateResult.affectedRows === 0) {
             return res.status(400).json({
                 success: false,
-                message: 'At least one service is required'
+                message: 'Slot is no longer available or already booked'
             });
         }
 
-        // Atomic operation: Find and update slot to prevent double booking
-        const slot = await Slot.findOneAndUpdate(
-            {
-                _id: slotId,
-                isAvailable: true,
-                isEnabled: true
-            },
-            {
-                isAvailable: false,
-                bookedBy: req.user.id
-            },
-            { new: true }
-        );
+        // Get slot details
+        const [slot] = await db.query('SELECT * FROM slots WHERE id = ?', [slotId]);
 
-        if (!slot) {
-            return res.status(400).json({
-                success: false,
-                message: 'Slot is not available or already booked'
-            });
-        }
-
-        // Get salon
-        const salon = await Salon.findById(slot.salon);
+        // Get salon details
+        const [salon] = await db.query('SELECT * FROM salons WHERE id = ?', [slot.salonId]);
         if (!salon || !salon.isActive || !salon.isVerified) {
             // Rollback slot
-            await Slot.findByIdAndUpdate(slotId, {
-                isAvailable: true,
-                bookedBy: null
-            });
-
-            return res.status(400).json({
-                success: false,
-                message: 'Salon is not available'
-            });
+            await db.query('UPDATE slots SET isAvailable = 1, bookedById = NULL WHERE id = ?', [slotId]);
+            return res.status(400).json({ success: false, message: 'Salon is not active or verified' });
         }
 
-        // Get services and calculate total
-        const services = await Service.find({
-            _id: { $in: serviceIds },
-            salon: salon._id,
-            isActive: true
-        });
+        // Fetch selected services
+        const placeholders = serviceIds.map(() => '?').join(',');
+        const services = await db.query(`
+            SELECT id, name, price, duration
+            FROM services
+            WHERE id IN (${placeholders}) AND salonId = ? AND isActive = 1
+        `, [...serviceIds, salon.id]);
 
         if (services.length === 0) {
-            // Rollback slot
-            await Slot.findByIdAndUpdate(slotId, {
-                isAvailable: true,
-                bookedBy: null
-            });
-
-            return res.status(400).json({
-                success: false,
-                message: 'No valid services found'
-            });
+            await db.query('UPDATE slots SET isAvailable = 1, bookedById = NULL WHERE id = ?', [slotId]);
+            return res.status(400).json({ success: false, message: 'No valid services selected' });
         }
 
-        // Prepare service details for booking
-        const bookingServices = services.map(service => ({
-            service: service._id,
-            name: service.name,
-            price: service.price,
-            duration: service.duration
-        }));
+        const totalAmount = services.reduce((sum, s) => sum + s.price, 0);
+        const bookingId = uuidv4();
+        const dateStr = normalizeDate(slot.date);
 
-        const totalAmount = services.reduce((sum, service) => sum + service.price, 0);
+        await db.query(`
+            INSERT INTO bookings (
+                id, customerId, salonId, slotId, services,
+                bookingDate, bookingTime, totalAmount, customerNotes, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
+        `, [
+            bookingId, req.user.id, salon.id, slot.id,
+            JSON.stringify(services.map(s => ({ ...s, service: s.id }))),
+            dateStr, slot.startTime, totalAmount, customerNotes || null
+        ]);
 
-        // Create booking
-        const booking = await Booking.create({
-            customer: req.user.id,
-            salon: salon._id,
-            slot: slot._id,
-            services: bookingServices,
-            bookingDate: slot.date,
-            bookingTime: slot.startTime,
-            totalAmount,
-            customerNotes,
-            status: 'confirmed' // Auto-confirm for now
-        });
+        // Link slot to booking
+        await db.query('UPDATE slots SET bookingId = ? WHERE id = ?', [bookingId, slotId]);
 
-        // Update slot with booking reference
-        await Slot.findByIdAndUpdate(slotId, { booking: booking._id });
-
-        // Populate booking for response
-        const populatedBooking = await Booking.findById(booking._id)
-            .populate('salon', 'name phone location')
-            .populate('slot', 'date startTime endTime');
+        // Fetch populated booking
+        const [bookingRow] = await db.query(`
+            SELECT b.*,
+                   u.name as customerName, u.email as customerEmail, u.phone as customerPhone,
+                   s.name as salonName, s.phone as salonPhone, s.coverImage as salonCoverImage,
+                   s.formattedAddress as salonAddress, s.city as salonCity,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN users u ON b.customerId = u.id
+            JOIN salons s ON b.salonId = s.id
+            JOIN slots sl ON b.slotId = sl.id
+            WHERE b.id = ?
+        `, [bookingId]);
 
         res.status(201).json({
             success: true,
             message: 'Booking created successfully',
-            data: populatedBooking
+            data: formatBooking(bookingRow)
         });
     } catch (error) {
         next(error);
@@ -138,31 +159,44 @@ exports.createBooking = async (req, res, next) => {
 exports.getMyBookings = async (req, res, next) => {
     try {
         const { status, page = 1, limit = 10 } = req.query;
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const offset = (pageNum - 1) * limitNum;
 
-        const query = { customer: req.user.id };
+        let whereSQL = 'WHERE b.customerId = ?';
+        let params = [req.user.id];
 
         if (status) {
-            query.status = status;
+            whereSQL += ' AND b.status = ?';
+            params.push(status);
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const rows = await db.query(`
+            SELECT b.*,
+                   s.name as salonName, s.phone as salonPhone, s.coverImage as salonCoverImage,
+                   s.formattedAddress as salonAddress, s.city as salonCity,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN salons s ON b.salonId = s.id
+            JOIN slots sl ON b.slotId = sl.id
+            ${whereSQL}
+            ORDER BY b.bookingDate DESC, b.bookingTime DESC
+            LIMIT ? OFFSET ?
+        `, [...params, limitNum, offset]);
 
-        const bookings = await Booking.find(query)
-            .populate('salon', 'name phone location coverImage')
-            .populate('slot', 'date startTime endTime')
-            .sort({ bookingDate: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const [countRow] = await db.query(`
+            SELECT COUNT(*) as total FROM bookings b ${whereSQL}
+        `, params);
 
-        const total = await Booking.countDocuments(query);
+        const total = countRow?.total || 0;
 
         res.status(200).json({
             success: true,
-            count: bookings.length,
+            count: rows.length,
             total,
-            page: parseInt(page),
-            pages: Math.ceil(total / parseInt(limit)),
-            data: bookings
+            page: pageNum,
+            pages: Math.ceil(total / limitNum) || 1,
+            data: rows.map(formatBooking)
         });
     } catch (error) {
         next(error);
@@ -176,22 +210,24 @@ exports.getMyBookings = async (req, res, next) => {
  */
 exports.getUpcomingBookings = async (req, res, next) => {
     try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = new Date().toISOString().split('T')[0];
 
-        const bookings = await Booking.find({
-            customer: req.user.id,
-            bookingDate: { $gte: today },
-            status: { $in: ['pending', 'confirmed'] }
-        })
-            .populate('salon', 'name phone location coverImage')
-            .populate('slot', 'date startTime endTime')
-            .sort({ bookingDate: 1, bookingTime: 1 });
+        const rows = await db.query(`
+            SELECT b.*,
+                   s.name as salonName, s.phone as salonPhone, s.coverImage as salonCoverImage,
+                   s.formattedAddress as salonAddress, s.city as salonCity,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN salons s ON b.salonId = s.id
+            JOIN slots sl ON b.slotId = sl.id
+            WHERE b.customerId = ? AND b.bookingDate >= ? AND b.status IN ('pending', 'confirmed')
+            ORDER BY b.bookingDate ASC, b.bookingTime ASC
+        `, [req.user.id, today]);
 
         res.status(200).json({
             success: true,
-            count: bookings.length,
-            data: bookings
+            count: rows.length,
+            data: rows.map(formatBooking)
         });
     } catch (error) {
         next(error);
@@ -205,34 +241,35 @@ exports.getUpcomingBookings = async (req, res, next) => {
  */
 exports.getBooking = async (req, res, next) => {
     try {
-        const booking = await Booking.findById(req.params.id)
-            .populate('customer', 'name email phone')
-            .populate('salon', 'name phone location coverImage')
-            .populate('slot', 'date startTime endTime');
+        const rows = await db.query(`
+            SELECT b.*,
+                   u.name as customerName, u.email as customerEmail, u.phone as customerPhone,
+                   s.name as salonName, s.phone as salonPhone, s.coverImage as salonCoverImage,
+                   s.formattedAddress as salonAddress, s.city as salonCity, s.ownerId as salonOwnerId,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN users u ON b.customerId = u.id
+            JOIN salons s ON b.salonId = s.id
+            JOIN slots sl ON b.slotId = sl.id
+            WHERE b.id = ?
+        `, [req.params.id]);
 
-        if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: 'Booking not found'
-            });
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Booking not found' });
         }
 
-        // Check access
-        const salon = await Salon.findById(booking.salon._id);
-        const isOwner = salon && salon.owner.toString() === req.user.id;
-        const isCustomer = booking.customer._id.toString() === req.user.id;
+        const b = rows[0];
+        const isOwner = b.salonOwnerId === req.user.id;
+        const isCustomer = b.customerId === req.user.id;
         const isAdmin = req.user.role === 'admin';
 
         if (!isOwner && !isCustomer && !isAdmin) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to view this booking'
-            });
+            return res.status(403).json({ success: false, message: 'Not authorized to view this booking' });
         }
 
         res.status(200).json({
             success: true,
-            data: booking
+            data: formatBooking(b)
         });
     } catch (error) {
         next(error);
@@ -248,69 +285,50 @@ exports.cancelBooking = async (req, res, next) => {
     try {
         const { reason } = req.body;
 
-        const booking = await Booking.findById(req.params.id);
+        const [booking] = await db.query(`
+            SELECT b.*, s.ownerId as salonOwnerId
+            FROM bookings b
+            JOIN salons s ON b.salonId = s.id
+            WHERE b.id = ?
+        `, [req.params.id]);
 
         if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: 'Booking not found'
-            });
+            return res.status(404).json({ success: false, message: 'Booking not found' });
         }
 
-        // Check if booking can be cancelled
         if (['completed', 'cancelled'].includes(booking.status)) {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot cancel a ${booking.status} booking`
-            });
+            return res.status(400).json({ success: false, message: `Cannot cancel a ${booking.status} booking` });
         }
 
-        // Check cancellation eligibility
-        const salon = await Salon.findById(booking.salon);
-        const isOwner = salon && salon.owner.toString() === req.user.id;
-        const isCustomer = booking.customer.toString() === req.user.id;
+        const isOwner = booking.salonOwnerId === req.user.id;
+        const isCustomer = booking.customerId === req.user.id;
         const isAdmin = req.user.role === 'admin';
 
         if (!isOwner && !isCustomer && !isAdmin) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to cancel this booking'
-            });
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        // Check cancellation time (e.g., 2 hours before)
-        const bookingDateTime = new Date(booking.bookingDate);
-        const [hours, minutes] = booking.bookingTime.split(':').map(Number);
-        bookingDateTime.setHours(hours, minutes, 0, 0);
+        const cancelledBy = isAdmin ? 'admin' : isOwner ? 'salon' : 'customer';
 
-        const now = new Date();
-        const hoursUntilBooking = (bookingDateTime - now) / (1000 * 60 * 60);
+        await db.query(`
+            UPDATE bookings
+            SET status = 'cancelled', cancelledBy = ?, cancellationReason = ?, cancelledAt = NOW()
+            WHERE id = ?
+        `, [cancelledBy, reason || null, req.params.id]);
 
-        if (isCustomer && hoursUntilBooking < 2) {
-            return res.status(400).json({
-                success: false,
-                message: 'Cannot cancel booking less than 2 hours before the appointment'
-            });
-        }
+        // Release slot
+        await db.query(`
+            UPDATE slots
+            SET isAvailable = 1, bookedById = NULL, bookingId = NULL
+            WHERE id = ?
+        `, [booking.slotId]);
 
-        // Update booking
-        booking.status = 'cancelled';
-        booking.cancelledBy = isAdmin ? 'admin' : isOwner ? 'salon' : 'customer';
-        booking.cancellationReason = reason;
-        booking.cancelledAt = new Date();
-        await booking.save();
-
-        // Release the slot
-        await Slot.findByIdAndUpdate(booking.slot, {
-            isAvailable: true,
-            bookedBy: null,
-            booking: null
-        });
+        const [updated] = await db.query('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
 
         res.status(200).json({
             success: true,
             message: 'Booking cancelled successfully',
-            data: booking
+            data: formatBooking(updated)
         });
     } catch (error) {
         next(error);
@@ -319,54 +337,61 @@ exports.cancelBooking = async (req, res, next) => {
 
 /**
  * @desc    Get salon bookings (for salon owner)
- * @route   GET /api/bookings/salon
+ * @route   GET /api/bookings/salon/all
  * @access  Private (Salon Owner)
  */
 exports.getSalonBookings = async (req, res, next) => {
     try {
         const { date, status, page = 1, limit = 10 } = req.query;
 
-        const salon = await Salon.findOne({ owner: req.user.id });
-
+        const [salon] = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
         if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
+            return res.status(404).json({ success: false, message: 'You must create a salon first' });
         }
 
-        const query = { salon: salon._id };
+        let whereSQL = 'WHERE b.salonId = ?';
+        let params = [salon.id];
 
         if (date) {
-            const queryDate = new Date(date);
-            queryDate.setHours(0, 0, 0, 0);
-            const nextDay = new Date(queryDate);
-            nextDay.setDate(nextDay.getDate() + 1);
-            query.bookingDate = { $gte: queryDate, $lt: nextDay };
+            const queryDate = normalizeDate(date);
+            whereSQL += ' AND DATE(b.bookingDate) = ?';
+            params.push(queryDate);
         }
 
         if (status) {
-            query.status = status;
+            whereSQL += ' AND b.status = ?';
+            params.push(status);
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 10;
+        const offset = (pageNum - 1) * limitNum;
 
-        const bookings = await Booking.find(query)
-            .populate('customer', 'name email phone')
-            .populate('slot', 'date startTime endTime')
-            .sort({ bookingDate: -1, bookingTime: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        const rows = await db.query(`
+            SELECT b.*,
+                   u.name as customerName, u.email as customerEmail, u.phone as customerPhone,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN users u ON b.customerId = u.id
+            JOIN slots sl ON b.slotId = sl.id
+            ${whereSQL}
+            ORDER BY b.bookingDate DESC, b.bookingTime DESC
+            LIMIT ? OFFSET ?
+        `, [...params, limitNum, offset]);
 
-        const total = await Booking.countDocuments(query);
+        const [countRow] = await db.query(`
+            SELECT COUNT(*) as total FROM bookings b ${whereSQL}
+        `, params);
+
+        const total = countRow?.total || 0;
 
         res.status(200).json({
             success: true,
-            count: bookings.length,
+            count: rows.length,
             total,
-            page: parseInt(page),
-            pages: Math.ceil(total / parseInt(limit)),
-            data: bookings
+            page: pageNum,
+            pages: Math.ceil(total / limitNum) || 1,
+            data: rows.map(formatBooking)
         });
     } catch (error) {
         next(error);
@@ -382,60 +407,35 @@ exports.updateBookingStatus = async (req, res, next) => {
     try {
         const { status, salonNotes } = req.body;
 
-        const booking = await Booking.findById(req.params.id);
+        const [booking] = await db.query(`
+            SELECT b.*, s.ownerId as salonOwnerId
+            FROM bookings b
+            JOIN salons s ON b.salonId = s.id
+            WHERE b.id = ?
+        `, [req.params.id]);
 
-        if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: 'Booking not found'
-            });
+        if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+        if (booking.salonOwnerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        const salon = await Salon.findById(booking.salon);
-
-        if (!salon || salon.owner.toString() !== req.user.id) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized'
-            });
-        }
-
-        // Validate status transition
-        const validTransitions = {
-            'pending': ['confirmed', 'cancelled'],
-            'confirmed': ['completed', 'cancelled', 'no-show']
-        };
-
-        if (!validTransitions[booking.status]?.includes(status)) {
-            return res.status(400).json({
-                success: false,
-                message: `Cannot change status from ${booking.status} to ${status}`
-            });
-        }
-
-        booking.status = status;
-        if (salonNotes) {
-            booking.salonNotes = salonNotes;
-        }
+        await db.query(`
+            UPDATE bookings
+            SET status = ?, salonNotes = COALESCE(?, salonNotes)
+            WHERE id = ?
+        `, [status, salonNotes || null, req.params.id]);
 
         if (status === 'cancelled') {
-            booking.cancelledBy = 'salon';
-            booking.cancelledAt = new Date();
-
-            // Release the slot
-            await Slot.findByIdAndUpdate(booking.slot, {
-                isAvailable: true,
-                bookedBy: null,
-                booking: null
-            });
+            await db.query('UPDATE slots SET isAvailable = 1, bookedById = NULL, bookingId = NULL WHERE id = ?', [booking.slotId]);
         }
 
-        await booking.save();
+        const [updated] = await db.query('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
 
         res.status(200).json({
             success: true,
             message: `Booking ${status}`,
-            data: booking
+            data: formatBooking(updated)
         });
     } catch (error) {
         next(error);
@@ -444,38 +444,31 @@ exports.updateBookingStatus = async (req, res, next) => {
 
 /**
  * @desc    Get today's bookings for salon owner
- * @route   GET /api/bookings/today
+ * @route   GET /api/bookings/salon/today
  * @access  Private (Salon Owner)
  */
 exports.getTodayBookings = async (req, res, next) => {
     try {
-        const salon = await Salon.findOne({ owner: req.user.id });
+        const [salon] = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (!salon) return res.status(404).json({ success: false, message: 'You must create a salon first' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
-        }
+        const today = new Date().toISOString().split('T')[0];
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-
-        const bookings = await Booking.find({
-            salon: salon._id,
-            bookingDate: { $gte: today, $lt: tomorrow },
-            status: { $in: ['pending', 'confirmed'] }
-        })
-            .populate('customer', 'name email phone')
-            .populate('slot', 'date startTime endTime')
-            .sort({ bookingTime: 1 });
+        const rows = await db.query(`
+            SELECT b.*,
+                   u.name as customerName, u.email as customerEmail, u.phone as customerPhone,
+                   sl.date as slotDate, sl.startTime as slotStartTime, sl.endTime as slotEndTime
+            FROM bookings b
+            JOIN users u ON b.customerId = u.id
+            JOIN slots sl ON b.slotId = sl.id
+            WHERE b.salonId = ? AND b.bookingDate = ? AND b.status IN ('pending', 'confirmed')
+            ORDER BY b.bookingTime ASC
+        `, [salon.id, today]);
 
         res.status(200).json({
             success: true,
-            count: bookings.length,
-            data: bookings
+            count: rows.length,
+            data: rows.map(formatBooking)
         });
     } catch (error) {
         next(error);

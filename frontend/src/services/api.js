@@ -1,8 +1,18 @@
 import axios from 'axios';
 
+// Normalize base URL to ensure it always includes /api even if omitted in environment variables
+const getBaseURL = () => {
+    let url = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    url = url.trim().replace(/\/$/, '');
+    if (!url.endsWith('/api')) {
+        url = `${url}/api`;
+    }
+    return url;
+};
+
 // Create axios instance with base URL
 const api = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+    baseURL: getBaseURL(),
     headers: {
         'Content-Type': 'application/json'
     }

@@ -2,7 +2,7 @@ services:
   - type: web
     name: salon-finder-backend
     env: node
-    region: oregon
+    region: singapore
     plan: free
     buildCommand: npm install
     startCommand: npm start
@@ -10,7 +10,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: MONGO_URI
+      - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
         sync: false

@@ -1,10 +1,10 @@
-const Slot = require('../models/Slot');
-const Salon = require('../models/Salon');
+const { randomUUID: uuidv4 } = require('crypto');
+const db = require('../config/db');
 const { generateSlotsForRange } = require('../utils/slotGenerator');
 
 /**
  * Slot Controller
- * Handles slot generation and management
+ * Handles slot generation and management on TiDB MySQL
  */
 
 /**
@@ -16,71 +16,63 @@ exports.generateSlots = async (req, res, next) => {
     try {
         const { startDate, endDate } = req.body;
 
-        // Find salon owned by user
-        const salon = await Salon.findOne({ owner: req.user.id });
-
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
+        const salons = await db.query('SELECT * FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (salons.length === 0) {
+            return res.status(404).json({ success: false, message: 'You must create a salon first' });
         }
 
-        // Validate dates
+        const salon = salons[0];
+        let workingHours = salon.workingHours;
+        if (typeof workingHours === 'string') {
+            try { workingHours = JSON.parse(workingHours); } catch (e) {}
+        }
+        salon.workingHours = workingHours;
+        salon._id = salon.id;
+
         const start = new Date(startDate);
         const end = new Date(endDate);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
         if (start < today) {
-            return res.status(400).json({
-                success: false,
-                message: 'Start date cannot be in the past'
-            });
+            return res.status(400).json({ success: false, message: 'Start date cannot be in the past' });
         }
 
         if (end < start) {
-            return res.status(400).json({
-                success: false,
-                message: 'End date must be after start date'
-            });
+            return res.status(400).json({ success: false, message: 'End date must be after start date' });
         }
 
-        // Limit to 30 days maximum
         const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         if (diffDays > 30) {
-            return res.status(400).json({
-                success: false,
-                message: 'Cannot generate slots for more than 30 days at once'
-            });
+            return res.status(400).json({ success: false, message: 'Cannot generate slots for more than 30 days at once' });
         }
 
-        // Generate slots
         const slotsToCreate = generateSlotsForRange(salon, start, end);
 
         if (slotsToCreate.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No slots to generate. Check your working hours.'
-            });
+            return res.status(400).json({ success: false, message: 'No slots to generate. Check your operating hours.' });
         }
 
-        // Insert slots (skip duplicates)
-        const result = await Slot.insertMany(slotsToCreate, { ordered: false })
-            .catch(err => {
-                // Handle duplicate key errors
-                if (err.code === 11000) {
-                    return { insertedCount: err.result?.nInserted || 0 };
-                }
-                throw err;
-            });
+        let insertedCount = 0;
+        for (const slot of slotsToCreate) {
+            const dateStr = slot.date.toISOString().split('T')[0];
+            const slotId = uuidv4();
+            const result = await db.query(`
+                INSERT IGNORE INTO slots (id, salonId, date, startTime, endTime, isAvailable, isEnabled)
+                VALUES (?, ?, ?, ?, ?, 1, 1)
+            `, [slotId, salon.id, dateStr, slot.startTime, slot.endTime]);
+
+            if (result.affectedRows > 0) {
+                insertedCount++;
+            }
+        }
 
         res.status(201).json({
             success: true,
-            message: `${result.insertedCount || slotsToCreate.length} slots generated`,
+            message: `${insertedCount} new slots generated (${slotsToCreate.length} processed)`,
             data: {
                 totalGenerated: slotsToCreate.length,
-                inserted: result.insertedCount || slotsToCreate.length
+                inserted: insertedCount
             }
         });
     } catch (error) {
@@ -99,31 +91,26 @@ exports.getSalonSlots = async (req, res, next) => {
         const { date } = req.query;
 
         if (!date) {
-            return res.status(400).json({
-                success: false,
-                message: 'Date is required'
-            });
+            return res.status(400).json({ success: false, message: 'Date is required' });
         }
 
-        const queryDate = new Date(date);
-        queryDate.setHours(0, 0, 0, 0);
+        const queryDate = new Date(date).toISOString().split('T')[0];
 
-        const nextDay = new Date(queryDate);
-        nextDay.setDate(nextDay.getDate() + 1);
-
-        const slots = await Slot.find({
-            salon: salonId,
-            date: {
-                $gte: queryDate,
-                $lt: nextDay
-            },
-            isEnabled: true
-        }).sort({ startTime: 1 });
+        const slots = await db.query(`
+            SELECT * FROM slots
+            WHERE salonId = ? AND date = ? AND isEnabled = 1
+            ORDER BY startTime ASC
+        `, [salonId, queryDate]);
 
         res.status(200).json({
             success: true,
             count: slots.length,
-            data: slots
+            data: slots.map(s => ({
+                ...s,
+                _id: s.id,
+                isAvailable: Boolean(s.isAvailable),
+                isEnabled: Boolean(s.isEnabled)
+            }))
         });
     } catch (error) {
         next(error);
@@ -139,38 +126,50 @@ exports.getMySlots = async (req, res, next) => {
     try {
         const { date, startDate, endDate } = req.query;
 
-        const salon = await Salon.findOne({ owner: req.user.id });
-
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
+        const salons = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (salons.length === 0) {
+            return res.status(404).json({ success: false, message: 'You must create a salon first' });
         }
 
-        let query = { salon: salon._id };
+        const salonId = salons[0].id;
+        let whereSQL = 'WHERE s.salonId = ?';
+        let params = [salonId];
 
         if (date) {
-            const queryDate = new Date(date);
-            queryDate.setHours(0, 0, 0, 0);
-            const nextDay = new Date(queryDate);
-            nextDay.setDate(nextDay.getDate() + 1);
-            query.date = { $gte: queryDate, $lt: nextDay };
+            const queryDate = new Date(date).toISOString().split('T')[0];
+            whereSQL += ' AND s.date = ?';
+            params.push(queryDate);
         } else if (startDate && endDate) {
-            query.date = {
-                $gte: new Date(startDate),
-                $lte: new Date(endDate)
-            };
+            const sDate = new Date(startDate).toISOString().split('T')[0];
+            const eDate = new Date(endDate).toISOString().split('T')[0];
+            whereSQL += ' AND s.date BETWEEN ? AND ?';
+            params.push(sDate, eDate);
         }
 
-        const slots = await Slot.find(query)
-            .populate('bookedBy', 'name email phone')
-            .sort({ date: 1, startTime: 1 });
+        const slots = await db.query(`
+            SELECT s.*, u.name as bookedByName, u.email as bookedByEmail, u.phone as bookedByPhone
+            FROM slots s
+            LEFT JOIN users u ON s.bookedById = u.id
+            ${whereSQL}
+            ORDER BY s.date ASC, s.startTime ASC
+        `, params);
 
         res.status(200).json({
             success: true,
             count: slots.length,
-            data: slots
+            data: slots.map(s => ({
+                ...s,
+                _id: s.id,
+                isAvailable: Boolean(s.isAvailable),
+                isEnabled: Boolean(s.isEnabled),
+                bookedBy: s.bookedById ? {
+                    id: s.bookedById,
+                    _id: s.bookedById,
+                    name: s.bookedByName,
+                    email: s.bookedByEmail,
+                    phone: s.bookedByPhone
+                } : null
+            }))
         });
     } catch (error) {
         next(error);
@@ -184,39 +183,33 @@ exports.getMySlots = async (req, res, next) => {
  */
 exports.toggleSlot = async (req, res, next) => {
     try {
-        const slot = await Slot.findById(req.params.id);
+        const slots = await db.query(`
+            SELECT s.*, sal.ownerId
+            FROM slots s
+            JOIN salons sal ON s.salonId = sal.id
+            WHERE s.id = ?
+        `, [req.params.id]);
 
-        if (!slot) {
-            return res.status(404).json({
-                success: false,
-                message: 'Slot not found'
-            });
+        if (slots.length === 0) {
+            return res.status(404).json({ success: false, message: 'Slot not found' });
         }
 
-        const salon = await Salon.findOne({ _id: slot.salon, owner: req.user.id });
-
-        if (!salon) {
-            return res.status(403).json({
-                success: false,
-                message: 'Not authorized to modify this slot'
-            });
+        const slot = slots[0];
+        if (slot.ownerId !== req.user.id) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
-        // Cannot disable a booked slot
         if (!slot.isAvailable) {
-            return res.status(400).json({
-                success: false,
-                message: 'Cannot disable a booked slot'
-            });
+            return res.status(400).json({ success: false, message: 'Cannot disable a booked slot' });
         }
 
-        slot.isEnabled = !slot.isEnabled;
-        await slot.save();
+        const newEnabled = slot.isEnabled ? 0 : 1;
+        await db.query('UPDATE slots SET isEnabled = ? WHERE id = ?', [newEnabled, req.params.id]);
 
         res.status(200).json({
             success: true,
-            message: `Slot ${slot.isEnabled ? 'enabled' : 'disabled'}`,
-            data: slot
+            message: `Slot ${newEnabled ? 'enabled' : 'disabled'}`,
+            data: { ...slot, _id: slot.id, isEnabled: Boolean(newEnabled) }
         });
     } catch (error) {
         next(error);
@@ -230,31 +223,26 @@ exports.toggleSlot = async (req, res, next) => {
  */
 exports.bulkToggleSlots = async (req, res, next) => {
     try {
-        const { slotIds, isEnabled } = req.body;
+        const { slotIds = [], isEnabled } = req.body;
 
-        const salon = await Salon.findOne({ owner: req.user.id });
+        const salons = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (salons.length === 0) return res.status(404).json({ success: false, message: 'Salon not found' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
+        if (slotIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'No slot IDs provided' });
         }
 
-        // Update only available slots (not booked ones)
-        const result = await Slot.updateMany(
-            {
-                _id: { $in: slotIds },
-                salon: salon._id,
-                isAvailable: true
-            },
-            { isEnabled }
-        );
+        const placeholders = slotIds.map(() => '?').join(',');
+        const result = await db.query(`
+            UPDATE slots
+            SET isEnabled = ?
+            WHERE id IN (${placeholders}) AND salonId = ? AND isAvailable = 1
+        `, [isEnabled ? 1 : 0, ...slotIds, salons[0].id]);
 
         res.status(200).json({
             success: true,
-            message: `${result.modifiedCount} slots updated`,
-            data: { modifiedCount: result.modifiedCount }
+            message: `${result.affectedRows} slots updated`,
+            data: { modifiedCount: result.affectedRows }
         });
     } catch (error) {
         next(error);
@@ -268,28 +256,19 @@ exports.bulkToggleSlots = async (req, res, next) => {
  */
 exports.deleteFutureSlots = async (req, res, next) => {
     try {
-        const salon = await Salon.findOne({ owner: req.user.id });
+        const salons = await db.query('SELECT id FROM salons WHERE ownerId = ?', [req.user.id]);
+        if (salons.length === 0) return res.status(404).json({ success: false, message: 'Salon not found' });
 
-        if (!salon) {
-            return res.status(404).json({
-                success: false,
-                message: 'You must create a salon first'
-            });
-        }
+        const today = new Date().toISOString().split('T')[0];
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // Only delete available (unbooked) future slots
-        const result = await Slot.deleteMany({
-            salon: salon._id,
-            date: { $gte: today },
-            isAvailable: true
-        });
+        const result = await db.query(`
+            DELETE FROM slots
+            WHERE salonId = ? AND date >= ? AND isAvailable = 1
+        `, [salons[0].id, today]);
 
         res.status(200).json({
             success: true,
-            message: `${result.deletedCount} future slots deleted`
+            message: `${result.affectedRows} future unbooked slots deleted`
         });
     } catch (error) {
         next(error);

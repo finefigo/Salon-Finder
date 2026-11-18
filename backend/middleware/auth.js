@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const db = require('../config/db');
 
 /**
  * Protect routes - Verify JWT token
@@ -26,24 +26,35 @@ exports.protect = async (req, res, next) => {
 
     try {
         // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET || 'salon_secret_key_change_in_production_12345'
+        );
 
-        // Get user from token
-        req.user = await User.findById(decoded.id);
+        // Get user from TiDB
+        const users = await db.query('SELECT * FROM users WHERE id = ?', [decoded.id]);
 
-        if (!req.user) {
+        if (!users || users.length === 0) {
             return res.status(401).json({
                 success: false,
                 message: 'User not found'
             });
         }
 
-        if (!req.user.isActive) {
+        const user = users[0];
+
+        if (!user.isActive) {
             return res.status(401).json({
                 success: false,
                 message: 'User account is deactivated'
             });
         }
+
+        // Attach user with both id and _id compatibility
+        req.user = {
+            ...user,
+            _id: user.id
+        };
 
         next();
     } catch (err) {
@@ -69,29 +80,4 @@ exports.authorize = (...roles) => {
         }
         next();
     };
-};
-
-/**
- * Optional auth - Adds user to request if token exists, but doesn't require it
- */
-exports.optionalAuth = async (req, res, next) => {
-    let token;
-
-    if (
-        req.headers.authorization &&
-        req.headers.authorization.startsWith('Bearer')
-    ) {
-        token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (token) {
-        try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = await User.findById(decoded.id);
-        } catch (err) {
-            // Token invalid, but we don't need to block
-        }
-    }
-
-    next();
 };
